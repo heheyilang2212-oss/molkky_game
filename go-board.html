@@ -225,6 +225,7 @@ a{color:#7cb7ff}
       </div>
     </details>
     <div class="statusBar">
+      <span><span id="stableDot" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#666;vertical-align:middle;margin-right:4px"></span><span id="stableLbl">--</span></span>
       <span>処理: <b id="procFps">--</b> fps</span>
       <span>黒 <b id="bCount">0</b></span>
       <span>白 <b id="wCount">0</b></span>
@@ -233,6 +234,7 @@ a{color:#7cb7ff}
     </div>
     <div class="actions">
       <button id="btnReset">隅をリセット</button>
+      <button id="btnRotate">盤を90°回転</button>
       <button id="btnSetInitial">現在を初手前に設定</button>
       <button id="btnClearMoves">履歴クリア</button>
       <button id="btnRecalib">再キャリブレ</button>
@@ -613,6 +615,18 @@ function drawOverlay(){
       }
     }
   }
+  // Crosshair on the active handle (alignment helper while dragging)
+  if(S.draggingHandle >= 0){
+    const p = pts[S.draggingHandle];
+    ctx.strokeStyle = 'rgba(244,208,63,.9)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4,4]);
+    ctx.beginPath();
+    ctx.moveTo(p.x, 0); ctx.lineTo(p.x, ov.height);
+    ctx.moveTo(0, p.y); ctx.lineTo(ov.width, p.y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
   // Handles
   for(let i=0;i<4;i++){
     const p = pts[i];
@@ -857,6 +871,12 @@ function detectFrame(){
     S.turn = (bc <= wc) ? 'B' : 'W';
   }
   $('turnInd').innerHTML = '手番: <b>' + (S.turn==='B' ? '黒●' : '白○') + '</b>';
+  // Stability indicator
+  let sCol = '#7cffa7', sLbl = '安定';
+  if(S.consecutiveRejects > 10){ sCol = '#ff6b6b'; sLbl = '不安定'; }
+  else if(S.consecutiveRejects > 3 || S.suspiciousFrames > 5){ sCol = '#f4d03f'; sLbl = 'やや不安定'; }
+  $('stableDot').style.background = sCol;
+  $('stableLbl').textContent = sLbl;
   drawBoardCanvas('boardB');
   drawOverlay();
   broadcastState();
@@ -1291,6 +1311,11 @@ function setVStatus(text, cls){
 function startProcessingLoop(){
   stopProcessingLoop();
   const tick = ()=>{
+    if(document.hidden){
+      // Skip while tab is in background to save battery/CPU
+      S.loopHandle = setTimeout(tick, 500);
+      return;
+    }
     const interval = 1000 / Math.max(1, S.targetFps);
     const t0 = performance.now();
     try{ detectFrame(); } catch(e){ console.error(e); }
@@ -1464,9 +1489,23 @@ function init(){
   $('showMoveNum').addEventListener('change', e=>{ S.showMoveNum = e.target.checked; saveSettings(); drawBoardCanvas('boardB'); });
   $('btnReset').addEventListener('click', ()=>{
     S.corners = defaultCorners();
+    initDetectionState();
+    S.movesInitialized = false;
+    S.initialPosition = null;
     saveSettings();
     drawOverlay();
     toast('隅をリセットしました - ドラッグで合わせて下さい');
+  });
+  $('btnRotate').addEventListener('click', ()=>{
+    if(!S.corners) return;
+    // Rotate corner labels 90° CW: TL←BL, TR←TL, BR←TR, BL←BR
+    S.corners = [S.corners[3], S.corners[0], S.corners[1], S.corners[2]];
+    initDetectionState();
+    S.movesInitialized = false;
+    S.initialPosition = null;
+    saveSettings();
+    drawOverlay();
+    toast('盤を90°回転しました');
   });
   $('btnClearMoves').addEventListener('click', ()=>{
     S.moves = [];
