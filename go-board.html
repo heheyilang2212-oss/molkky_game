@@ -265,6 +265,11 @@ a{color:#7cb7ff}
       <span>手数 <b id="vMoveCount">0</b></span>
       <span id="vTurn"></span>
     </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:center">
+      <button id="vSoundBtn" style="padding:6px 14px;border-radius:18px;border:1px solid rgba(255,255,255,.2);background:rgba(255,255,255,.06);color:#fff;font-size:.78rem">🔇 音オフ</button>
+      <button id="vNumBtn" style="padding:6px 14px;border-radius:18px;border:1px solid rgba(255,255,255,.2);background:rgba(255,255,255,.06);color:#fff;font-size:.78rem">手番表示 オフ</button>
+      <button id="vSgfBtn" style="padding:6px 14px;border-radius:18px;border:1px solid rgba(244,208,63,.5);background:rgba(244,208,63,.15);color:#f4d03f;font-size:.78rem">SGFダウンロード</button>
+    </div>
   </div>
 </section>
 
@@ -316,6 +321,7 @@ const S = {
   turn: 'B',
   lastMoveTime: 0,
   vPrevMoveCount: 0,       // viewer side: previous move count for diff
+  vLatestState: null,      // viewer side: most recent state from broadcaster
   // Camera
   stream: null,
   videoEl: null,
@@ -543,7 +549,17 @@ function resizeOverlay(){
     S.procCanvas.height = Math.round(PROC_W * aspect);
   }
 }
-window.addEventListener('resize', ()=>{ if(S.mode==='broadcast') resizeOverlay(); });
+window.addEventListener('resize', ()=>{
+  if(S.mode==='broadcast'){ resizeOverlay(); drawBoardCanvas('boardB'); }
+  else if(S.mode==='view' && S.vLatestState){
+    drawBoardCanvas('boardV', {
+      size: S.vLatestState.size,
+      committed: S.vLatestState.committed,
+      lastMove: S.vLatestState.moves && S.vLatestState.moves.length ? S.vLatestState.moves[S.vLatestState.moves.length-1] : null,
+      moves: S.vLatestState.moves,
+    });
+  }
+});
 
 function videoDisplayRect(){
   // The <video> element uses object-fit:contain. Compute the actual displayed rect of video pixels within the element.
@@ -1106,14 +1122,10 @@ function sgfCoord(x, y){
   // SGF columns/rows: 0..N-1 → 'a'..  (no skip)
   return String.fromCharCode(97 + x) + String.fromCharCode(97 + y);
 }
-function generateSGF(){
-  const N = S.size;
+function buildSGFFrom(N, initialBoard, currentBoard, moves, turn){
   const date = new Date().toISOString().slice(0,10);
   let body = `(;FF[4]GM[1]CA[UTF-8]SZ[${N}]DT[${date}]AP[GoBoardCameraStream:1.0]`;
-  // Initial position (AB / AW): if move tracking is enabled, use the captured initial
-  // position; otherwise dump the current position so the SGF describes the live state.
-  const initial = (S.trackMoves && S.movesInitialized && S.initialPosition)
-    ? S.initialPosition : S.committed;
+  const initial = initialBoard || currentBoard;
   if(initial){
     const ab = [], aw = [];
     for(let i=0;i<N;i++) for(let j=0;j<N;j++){
@@ -1123,20 +1135,31 @@ function generateSGF(){
     if(ab.length) body += '\nAB' + ab.map(c=>'['+c+']').join('');
     if(aw.length) body += '\nAW' + aw.map(c=>'['+c+']').join('');
   }
-  if(S.trackMoves && S.moves.length){
+  if(moves && moves.length){
     body += '\n';
-    for(const m of S.moves) body += `;${m.c}[${sgfCoord(m.x, m.y)}]`;
-  } else {
-    body += `\nPL[${S.turn}]`;
+    for(const m of moves) body += `;${m.c}[${sgfCoord(m.x, m.y)}]`;
+  } else if(turn){
+    body += `\nPL[${turn}]`;
   }
   body += ')\n';
-  const blob = new Blob([body], {type:'application/x-go-sgf'});
+  return body;
+}
+function downloadSGF(text, filenamePrefix){
+  const date = new Date().toISOString().slice(0,10);
+  const blob = new Blob([text], {type:'application/x-go-sgf'});
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = 'goboard_' + date + '_' + new Date().toTimeString().slice(0,5).replace(':','') + '.sgf';
+  a.download = (filenamePrefix||'goboard') + '_' + date + '_' + new Date().toTimeString().slice(0,5).replace(':','') + '.sgf';
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(()=>URL.revokeObjectURL(url), 1000);
+}
+function generateSGF(){
+  const N = S.size;
+  const initial = (S.trackMoves && S.movesInitialized && S.initialPosition) ? S.initialPosition : null;
+  const moves = S.trackMoves ? S.moves : null;
+  const text = buildSGFFrom(N, initial, S.committed, moves, S.turn);
+  downloadSGF(text, 'goboard');
   toast('SGF をダウンロードしました');
 }
 
@@ -1205,7 +1228,8 @@ function snapshotState(){
     type: 'state',
     size: S.size,
     committed: S.committed,
-    moves: S.moves,
+    moves: S.trackMoves ? S.moves : [],
+    initialPosition: (S.trackMoves && S.movesInitialized) ? S.initialPosition : null,
     turn: S.turn,
     ts: Date.now(),
   };
@@ -1261,6 +1285,7 @@ function connectToHost(shortId){
   });
   conn.on('data', (data)=>{
     if(data && data.type === 'state'){
+      S.vLatestState = data;
       drawBoardCanvas('boardV', {
         size: data.size,
         committed: data.committed,
@@ -1575,6 +1600,37 @@ function init(){
 
   // Viewer controls
   $('vExit').addEventListener('click', exitView);
+  function syncViewerToggleLabels(){
+    $('vSoundBtn').textContent = (S.soundOn ? '🔔 音オン' : '🔇 音オフ');
+    $('vNumBtn').textContent = '手数表示 ' + (S.showMoveNum ? 'オン' : 'オフ');
+  }
+  $('vSoundBtn').addEventListener('click', ()=>{
+    S.soundOn = !S.soundOn;
+    saveSettings();
+    syncViewerToggleLabels();
+    if(S.soundOn) playStoneClick();
+  });
+  $('vNumBtn').addEventListener('click', ()=>{
+    S.showMoveNum = !S.showMoveNum;
+    saveSettings();
+    syncViewerToggleLabels();
+    if(S.vLatestState){
+      drawBoardCanvas('boardV', {
+        size: S.vLatestState.size,
+        committed: S.vLatestState.committed,
+        lastMove: S.vLatestState.moves && S.vLatestState.moves.length ? S.vLatestState.moves[S.vLatestState.moves.length-1] : null,
+        moves: S.vLatestState.moves,
+      });
+    }
+  });
+  $('vSgfBtn').addEventListener('click', ()=>{
+    if(!S.vLatestState){ toast('盤面データがまだ届いていません', true); return; }
+    const d = S.vLatestState;
+    const text = buildSGFFrom(d.size, d.initialPosition || null, d.committed, d.moves, d.turn);
+    downloadSGF(text, 'goboard_view');
+    toast('SGFをダウンロード');
+  });
+  syncViewerToggleLabels();
 
   // Overlay input + board edit
   attachOverlayInput();
