@@ -236,6 +236,8 @@ a{color:#7cb7ff}
       <button id="btnSetInitial">現在を初手前に設定</button>
       <button id="btnClearMoves">履歴クリア</button>
       <button id="btnRecalib">再キャリブレ</button>
+      <button id="btnPng">盤面をPNG保存</button>
+      <button id="btnUndo">最終手を取消</button>
       <button class="primary full" id="btnSGF">SGFをダウンロード</button>
     </div>
   </div>
@@ -778,13 +780,38 @@ function detectFrame(){
   // Most points are empty (= wood) for typical positions, so median ≈ wood V.
   const Vall = Array.from(Vs);
   const ref = median(Vall);
-  // Classify per-intersection (without committing yet)
+  // Pass 1: classify with the global reference
+  const cls1 = new Array(N);
+  for(let i=0;i<N;i++){
+    cls1[i] = new Array(N);
+    for(let j=0;j<N;j++){
+      const v = Vs[i*N + j];
+      cls1[i][j] = (v < ref - S.blackTh) ? 'B' : (v > ref + S.whiteTh) ? 'W' : '.';
+    }
+  }
+  // Pass 2: refine with a local reference computed from nearby cells
+  // classified as empty in pass 1. Helps boards with non-uniform lighting
+  // (window light on one side, etc.). Falls back to the global ref when no
+  // empty neighbours exist (highly populated region).
   const cls = new Array(N);
+  const radius = 2;
+  const tmp = [];
   for(let i=0;i<N;i++){
     cls[i] = new Array(N);
     for(let j=0;j<N;j++){
+      tmp.length = 0;
+      for(let di=-radius; di<=radius; di++){
+        const ni = i+di;
+        if(ni<0||ni>=N) continue;
+        for(let dj=-radius; dj<=radius; dj++){
+          const nj = j+dj;
+          if(nj<0||nj>=N) continue;
+          if(cls1[ni][nj] === '.') tmp.push(Vs[ni*N + nj]);
+        }
+      }
+      const lref = tmp.length >= 4 ? median(tmp) : ref;
       const v = Vs[i*N + j];
-      cls[i][j] = (v < ref - S.blackTh) ? 'B' : (v > ref + S.whiteTh) ? 'W' : '.';
+      cls[i][j] = (v < lref - S.blackTh) ? 'B' : (v > lref + S.whiteTh) ? 'W' : '.';
     }
   }
   // Occlusion / spike rejection: if this frame's classification differs from the
@@ -1467,6 +1494,33 @@ function init(){
     toast('検出履歴をクリアしました');
   });
   $('btnSGF').addEventListener('click', generateSGF);
+  $('btnPng').addEventListener('click', ()=>{
+    const cnv = $('boardB');
+    cnv.toBlob((blob)=>{
+      if(!blob){ toast('PNG生成に失敗', true); return; }
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const stamp = new Date().toISOString().slice(0,19).replace(/[:T]/g,'');
+      a.href = url; a.download = 'goboard_' + stamp + '.png';
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(()=>URL.revokeObjectURL(url), 1000);
+      toast('PNGを保存しました');
+    }, 'image/png');
+  });
+  $('btnUndo').addEventListener('click', ()=>{
+    if(!S.moves.length){ toast('取消す手がありません', true); return; }
+    const m = S.moves.pop();
+    if(S.committed[m.x] && S.committed[m.x][m.y] === m.c){
+      S.committed[m.x][m.y] = '.';
+      S.history[m.x][m.y] = Array.from({length:S.histDepth}, ()=>'.');
+      S.prevCommitted[m.x][m.y] = '.';
+    }
+    $('moveCount').textContent = S.moves.length;
+    drawBoardCanvas('boardB');
+    drawOverlay();
+    broadcastState();
+    toast('最終手を取消');
+  });
   $('copyId').addEventListener('click', async ()=>{
     const v = $('roomId').textContent;
     if(!v || v === '準備中...') return;
