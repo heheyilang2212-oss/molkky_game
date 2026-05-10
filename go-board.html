@@ -53,7 +53,8 @@ a{color:#7cb7ff}
 .cam-area{position:relative;width:100%;background:#000;border-radius:10px;overflow:hidden;aspect-ratio:4/3;flex-shrink:0}
 .cam-area video{width:100%;height:100%;object-fit:contain;display:block;background:#000}
 .cam-area canvas#overlay{position:absolute;inset:0;width:100%;height:100%;touch-action:none}
-.cam-area .camHint{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);background:rgba(0,0,0,.7);padding:10px 16px;border-radius:8px;font-size:.78rem;color:#f4d03f;text-align:center;line-height:1.5;pointer-events:none;max-width:80%;display:none}
+.cam-area .camHint{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);background:rgba(0,0,0,.7);padding:10px 16px;border-radius:8px;font-size:.78rem;color:#f4d03f;text-align:center;line-height:1.5;max-width:80%;display:none}
+.cam-area .camHint button{margin-top:8px;padding:6px 14px;border-radius:18px;border:1px solid #f4d03f;background:transparent;color:#f4d03f;font-weight:700;font-size:.78rem;cursor:pointer;pointer-events:auto}
 .cam-area.noCam .camHint{display:block}
 
 .board-area{width:100%;display:flex;justify-content:center;align-items:center;background:#13110d;border-radius:10px;padding:8px;flex-shrink:0}
@@ -165,7 +166,10 @@ a{color:#7cb7ff}
     <div class="cam-area" id="camArea">
       <video id="cam" autoplay playsinline muted></video>
       <canvas id="overlay"></canvas>
-      <div class="camHint">カメラを起動してください<br>または許可をリセット</div>
+      <div class="camHint">
+        <div id="camHintMsg">カメラを起動してください</div>
+        <button id="camRetry">もう一度試す</button>
+      </div>
     </div>
     <div class="board-area">
       <canvas id="boardB" width="500" height="500"></canvas>
@@ -1177,6 +1181,8 @@ function setLiveBadge(state){
 function startPeerHost(forceNewId){
   if(typeof Peer === 'undefined'){
     setLiveBadge('PeerJS未読込');
+    $('roomId').textContent = '配信不可';
+    $('viewUrl').textContent = 'ネット接続を確認してください';
     toast('PeerJS が読み込めませんでした。ネット接続を確認してください', true);
     return;
   }
@@ -1411,6 +1417,23 @@ async function enterBroadcast(){
     const hint = (e && e.name === 'NotAllowedError') ? 'カメラ許可が拒否されました。ブラウザ設定で許可してください。'
       : (e && e.name === 'NotFoundError') ? 'カメラデバイスが見つかりません。'
       : 'カメラを開けません: ' + (e.message||e.name);
+    $('camHintMsg').textContent = hint;
+    toast(hint, true);
+  }
+}
+async function retryCamera(){
+  try{
+    await startCamera();
+    $('camArea').classList.remove('noCam');
+    resizeOverlay();
+    drawOverlay();
+    if(!S.loopHandle) startProcessingLoop();
+    toast('カメラを開きました');
+  }catch(e){
+    const hint = (e && e.name === 'NotAllowedError') ? 'カメラ許可が拒否されています。ブラウザ設定で許可してください。'
+      : (e && e.name === 'NotFoundError') ? 'カメラデバイスが見つかりません。'
+      : 'カメラを開けません: ' + (e.message||e.name);
+    $('camHintMsg').textContent = hint;
     toast(hint, true);
   }
 }
@@ -1613,6 +1636,9 @@ function init(){
     try{ await navigator.clipboard.writeText(v); toast('URLをコピー'); }
     catch(e){ toast('コピー失敗', true); }
   });
+
+  // Camera retry
+  $('camRetry').addEventListener('click', retryCamera);
 
   // Viewer controls
   $('vExit').addEventListener('click', exitView);
