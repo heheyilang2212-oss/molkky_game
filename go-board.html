@@ -1322,7 +1322,9 @@ function connectToHost(shortId){
       S.vPrevMoveCount = mvCount;
       $('vMoveCount').textContent = mvCount;
       $('vTurn').innerHTML = '手番: <b>' + (data.turn==='B'?'黒●':'白○') + '</b>';
-      setVStatus('受信中  最終更新 ' + new Date().toLocaleTimeString(), 'connected');
+      const lat = data.ts ? Math.max(0, Date.now() - data.ts) : null;
+      const latStr = lat !== null ? '  遅延 ' + lat + 'ms' : '';
+      setVStatus('受信中  ' + new Date().toLocaleTimeString() + latStr, 'connected');
     }
   });
   conn.on('close', ()=>{
