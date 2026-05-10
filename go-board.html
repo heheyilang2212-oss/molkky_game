@@ -175,6 +175,7 @@ a{color:#7cb7ff}
         <span class="lbl">部屋ID</span>
         <span class="val" id="roomId">準備中...</span>
         <button id="copyId">コピー</button>
+        <button id="newId" title="新しい部屋IDを発行">↻</button>
         <span class="badge connecting" id="liveBadge">接続中</span>
       </div>
       <div class="row">
@@ -1173,14 +1174,23 @@ function setLiveBadge(state){
   else if(state === 'connecting'){ b.classList.add('connecting'); b.textContent = '接続中'; }
   else { b.classList.add('connecting'); b.textContent = state; }
 }
-function startPeerHost(){
+function startPeerHost(forceNewId){
   if(typeof Peer === 'undefined'){
     setLiveBadge('PeerJS未読込');
     toast('PeerJS が読み込めませんでした。ネット接続を確認してください', true);
     return;
   }
   if(S.peer){ try{ S.peer.destroy(); }catch(e){} S.peer = null; }
-  const id = PEER_PREFIX + makeShortId();
+  let stored = null;
+  try{ stored = localStorage.getItem('goboard.peerShortId'); }catch(e){}
+  let shortId;
+  if(!forceNewId && stored && /^[A-Z0-9]{6}$/.test(stored)){
+    shortId = stored;
+  } else {
+    shortId = makeShortId();
+    try{ localStorage.setItem('goboard.peerShortId', shortId); }catch(e){}
+  }
+  const id = PEER_PREFIX + shortId;
   setLiveBadge('connecting');
   S.peer = new Peer(id, { debug: 1 });
   S.peer.on('open', (pid)=>{
@@ -1215,8 +1225,9 @@ function startPeerHost(){
   S.peer.on('error', (err)=>{
     console.warn('peer error', err);
     if(err && err.type === 'unavailable-id'){
-      // ID collision: try a new one
-      setTimeout(startPeerHost, 200);
+      // ID collision: drop the stored ID and try a new random one once.
+      try{ localStorage.removeItem('goboard.peerShortId'); }catch(e){}
+      setTimeout(()=>startPeerHost(true), 200);
     } else {
       setLiveBadge('エラー');
       toast('接続エラー: ' + (err.type || err.message || ''), true);
@@ -1590,6 +1601,11 @@ function init(){
     if(!v || v === '準備中...') return;
     try{ await navigator.clipboard.writeText(v); toast('部屋IDをコピー'); }
     catch(e){ toast('コピー失敗', true); }
+  });
+  $('newId').addEventListener('click', ()=>{
+    try{ localStorage.removeItem('goboard.peerShortId'); }catch(e){}
+    startPeerHost(true);
+    toast('新しい部屋IDを発行します...');
   });
   $('copyUrl').addEventListener('click', async ()=>{
     const v = $('viewUrl').textContent;
