@@ -107,6 +107,18 @@ a{color:#7cb7ff}
 .vStatus.disconnected{color:#ff6b6b}
 .vMeta{display:flex;gap:14px;font-size:.72rem;color:#6b7c75}
 .vMeta b{color:#f4d03f}
+.vPlayer{display:flex;flex-direction:column;align-items:center;gap:6px;width:100%;max-width:520px;padding:6px 10px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);border-radius:12px}
+.vPlayer .vpBtns{display:flex;gap:6px;align-items:center;justify-content:center;width:100%}
+.vPlayer .vpBtns button{flex:0 0 auto;min-width:42px;padding:8px 10px;border-radius:10px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.16);color:#fff;font-size:1rem;line-height:1}
+.vPlayer .vpBtns button:active{transform:scale(.94)}
+.vPlayer .vpBtns button.live{background:rgba(231,76,60,.18);border-color:#ff6b6b;color:#ff6b6b;font-size:.72rem;font-weight:700;padding:8px 12px;min-width:auto}
+.vPlayer .vpBtns button.live.on{background:#ff3030;color:#fff;border-color:#ff3030;box-shadow:0 0 12px rgba(255,48,48,.45)}
+.vPlayer .vpBtns button.play.on{background:#f4d03f;color:#1a1a1a;border-color:#f4d03f}
+.vPlayer input[type=range]{width:100%;-webkit-appearance:none;appearance:none;height:6px;background:rgba(255,255,255,.1);border-radius:3px;outline:none;margin:2px 0}
+.vPlayer input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:22px;height:22px;border-radius:50%;background:#f4d03f;cursor:pointer}
+.vPlayer input[type=range]::-moz-range-thumb{width:22px;height:22px;border-radius:50%;background:#f4d03f;cursor:pointer;border:none}
+.vPlayer .vpLabel{font-size:.78rem;color:#aaa;letter-spacing:.5px}
+.vPlayer .vpLabel b{color:#f4d03f}
 
 /* ============================================================
    TOAST
@@ -197,11 +209,13 @@ a{color:#7cb7ff}
       <summary>設定 ・ しきい値調整</summary>
       <div class="sBody">
         <div class="sRow">
-          <div class="sHead">黒の検出強度 <span class="v" id="blackVal">55</span></div>
+          <div class="sHead">黒の判定の厳しさ <span class="v" id="blackVal">55</span></div>
+          <div style="font-size:.7rem;color:#aaa;margin-bottom:4px">大きい=より暗い時だけ黒と判定（誤検出が減る）／小さい=黒と認めやすい</div>
           <input type="range" id="blackTh" min="10" max="120" value="55">
         </div>
         <div class="sRow">
-          <div class="sHead">白の検出強度 <span class="v" id="whiteVal">30</span></div>
+          <div class="sHead">白の判定の厳しさ <span class="v" id="whiteVal">30</span></div>
+          <div style="font-size:.7rem;color:#aaa;margin-bottom:4px">大きい=より明るい時だけ白と判定（光の反射に強い）／小さい=白と認めやすい</div>
           <input type="range" id="whiteTh" min="5" max="120" value="30">
         </div>
         <div class="sRow">
@@ -243,12 +257,22 @@ a{color:#7cb7ff}
       <span>白 <b id="wCount">0</b></span>
       <span>手数 <b id="moveCount">0</b></span>
       <span id="turnInd">手番: --</span>
+      <span id="gameStateInd" style="margin-left:auto;padding:2px 10px;border-radius:10px;background:rgba(244,208,63,.15);color:#f4d03f;font-weight:600">準備中</span>
+    </div>
+    <div class="players" style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:6px 0;font-size:.82rem;color:#ddd">
+      <label style="display:flex;align-items:center;gap:6px">●黒<input id="blackName" type="text" maxlength="40" placeholder="黒番の名前" style="width:140px;padding:4px 8px;border-radius:6px;border:1px solid rgba(255,255,255,.18);background:rgba(0,0,0,.25);color:#fff"></label>
+      <label style="display:flex;align-items:center;gap:6px">○白<input id="whiteName" type="text" maxlength="40" placeholder="白番の名前" style="width:140px;padding:4px 8px;border-radius:6px;border:1px solid rgba(255,255,255,.18);background:rgba(0,0,0,.25);color:#fff"></label>
+      <label style="display:flex;align-items:center;gap:6px">対局名<input id="gameName" type="text" maxlength="80" placeholder="(任意)" style="width:160px;padding:4px 8px;border-radius:6px;border:1px solid rgba(255,255,255,.18);background:rgba(0,0,0,.25);color:#fff"></label>
     </div>
     <div class="actions">
+      <button class="primary full" id="btnStart">▶ 開始（カウント開始）</button>
+      <button id="btnRestart">⟲ 初期状態に戻す（1手目から）</button>
+      <button id="btnCaptureRef" title="盤に石が無い状態でこのボタンを押すと、木目や照明ムラを覚えて誤検出を減らせます">📷 空の盤面を基準として記録</button>
+      <button id="btnClearRef" style="display:none">基準をクリア</button>
+      <button id="btnCalibStones" title="●黒を右上・右下の星、○白を左上・左下の星に置いてからこのボタン">🎯 黒白の見本を記録（4つの星に置く）</button>
+      <button id="btnClearCalib" style="display:none">見本をクリア</button>
       <button id="btnReset">隅をリセット</button>
       <button id="btnRotate">盤を90°回転</button>
-      <button id="btnSetInitial">現在を初手前に設定</button>
-      <button id="btnClearMoves">履歴クリア</button>
       <button id="btnRecalib">再キャリブレ</button>
       <button id="btnPng">盤面をPNG保存</button>
       <button id="btnUndo">最終手を取消</button>
@@ -271,11 +295,23 @@ a{color:#7cb7ff}
       <canvas id="boardV" width="500" height="500"></canvas>
     </div>
     <div class="vStatus" id="vStatus">接続中...</div>
+    <div id="vPlayers" style="display:none;font-size:.85rem;color:#f4d03f;text-align:center;margin:4px 0;line-height:1.4"></div>
     <div class="vMeta">
       <span>黒 <b id="vBCount">0</b></span>
       <span>白 <b id="vWCount">0</b></span>
       <span>手数 <b id="vMoveCount">0</b></span>
       <span id="vTurn"></span>
+    </div>
+    <div class="vPlayer">
+      <input type="range" id="vSlider" min="0" max="0" value="0" step="1">
+      <div class="vpBtns">
+        <button id="vToStart" title="最初へ">⏮</button>
+        <button id="vBack" title="1手戻る">◀</button>
+        <button id="vPlay" class="play" title="自動再生">▶</button>
+        <button id="vFwd" title="1手進む">▶▶</button>
+        <button id="vToLive" class="live on" title="ライブに戻る">LIVE</button>
+      </div>
+      <div class="vpLabel"><b id="vMoveLabel">0</b> / <span id="vMoveTotal">0</span> 手</div>
     </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:center">
       <button id="vSoundBtn" style="padding:6px 14px;border-radius:18px;border:1px solid rgba(255,255,255,.2);background:rgba(255,255,255,.06);color:#fff;font-size:.78rem">🔇 音オフ</button>
@@ -298,6 +334,13 @@ const STAR_POINTS = {
   9:  [[2,2],[2,6],[6,2],[6,6],[4,4]],
   13: [[3,3],[3,9],[9,3],[9,9],[6,6]],
   19: [[3,3],[3,9],[3,15],[9,3],[9,9],[9,15],[15,3],[15,9],[15,15]],
+};
+// Four corner-star intersections used for the 黒白の見本 calibration:
+// place ○白 on the TL/BL stars and ●黒 on the TR/BR stars.
+const CORNER_STAR_POINTS = {
+  9:  { white: [[2,2],[2,6]], black: [[6,2],[6,6]] },
+  13: { white: [[3,3],[3,9]], black: [[9,3],[9,9]] },
+  19: { white: [[3,3],[3,15]], black: [[15,3],[15,15]] },
 };
 const PROC_W = 640;          // downscaled processing width
 const PEER_PREFIX = 'goboard-';
@@ -330,10 +373,35 @@ const S = {
   initialPosition: null,   // committed snapshot at the moment tracking started
   movesInitialized: false,
   suspiciousFrames: 0,
+  // Whether the broadcaster has pressed "開始" yet. Until then, stones are
+  // still recognized and shown locally, but moves are NOT counted and the
+  // viewer does not receive any move history.
+  gameStarted: false,
+  // Player names — written into SGF as PB / PW and broadcast to viewers.
+  blackName: '',
+  whiteName: '',
+  gameName: '',
+  // Empty-board reference: per-cell V/S captured when the board is empty.
+  // When set, classification uses this as the baseline instead of the running
+  // row/column median, which dramatically reduces false positives caused by
+  // wood-grain knots, uneven lighting, etc. Stored in-memory only (depends on
+  // camera position and lighting).
+  refBoard: null,        // { size:N, V:Float32Array(N*N), S:Float32Array(N*N), ts }
+  _lastVs: null,
+  _lastSs: null,
+  // Stone-color calibration: V/S learned from real black & white stones
+  // placed on the four corner-star points. When set, classification becomes
+  // a 3-way closest-anchor decision (empty / black / white) instead of
+  // relying on a single brightness threshold.
+  stoneCalib: null,      // { size, blackV, whiteV, blackS, whiteS, ts }
   turn: 'B',
   lastMoveTime: 0,
   vPrevMoveCount: 0,       // viewer side: previous move count for diff
   vLatestState: null,      // viewer side: most recent state from broadcaster
+  vViewIndex: 0,           // viewer side: which move (0..moves.length) is being displayed
+  vAtLive: true,           // viewer side: locked to latest move?
+  vIsPlaying: false,       // viewer side: auto-advance running?
+  vPlayHandle: null,       // viewer side: setInterval handle for auto-play
   // Camera
   stream: null,
   videoEl: null,
@@ -388,6 +456,64 @@ function toast(msg, isErr){
   t._h = setTimeout(()=>t.classList.remove('show'), 2400);
 }
 function clamp(v,a,b){return v<a?a:v>b?b:v}
+function escapeHtml(s){
+  return String(s).replace(/[&<>"']/g, c=>({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
+}
+function updateRefBoardUI(){
+  const cap = document.getElementById('btnCaptureRef');
+  const clr = document.getElementById('btnClearRef');
+  if(!cap || !clr) return;
+  if(S.refBoard && S.refBoard.size === S.size){
+    cap.textContent = '📷 空の盤面を再記録（基準あり）';
+    cap.style.background = 'rgba(124,255,167,.18)';
+    cap.style.color = '#7cffa7';
+    cap.style.borderColor = 'rgba(124,255,167,.4)';
+    clr.style.display = '';
+  } else {
+    cap.textContent = '📷 空の盤面を基準として記録';
+    cap.style.background = '';
+    cap.style.color = '';
+    cap.style.borderColor = '';
+    clr.style.display = 'none';
+  }
+}
+function updateStoneCalibUI(){
+  const cap = document.getElementById('btnCalibStones');
+  const clr = document.getElementById('btnClearCalib');
+  if(!cap || !clr) return;
+  if(S.stoneCalib && S.stoneCalib.size === S.size){
+    cap.textContent = '🎯 黒白の見本を再記録（見本あり）';
+    cap.style.background = 'rgba(124,255,167,.18)';
+    cap.style.color = '#7cffa7';
+    cap.style.borderColor = 'rgba(124,255,167,.4)';
+    clr.style.display = '';
+  } else {
+    cap.textContent = '🎯 黒白の見本を記録（4つの星に置く）';
+    cap.style.background = '';
+    cap.style.color = '';
+    cap.style.borderColor = '';
+    clr.style.display = 'none';
+  }
+}
+function updateGameStateUI(){
+  const ind = document.getElementById('gameStateInd');
+  const start = document.getElementById('btnStart');
+  const restart = document.getElementById('btnRestart');
+  if(!ind || !start || !restart) return;
+  if(S.gameStarted){
+    ind.textContent = '対局中';
+    ind.style.background = 'rgba(124,255,167,.18)';
+    ind.style.color = '#7cffa7';
+    start.style.display = 'none';
+    restart.style.display = '';
+  } else {
+    ind.textContent = '準備中（開始を押すまで手数は数えません）';
+    ind.style.background = 'rgba(244,208,63,.18)';
+    ind.style.color = '#f4d03f';
+    start.style.display = '';
+    restart.style.display = 'none';
+  }
+}
 function median(arr){
   const a = arr.slice().sort((x,y)=>x-y);
   const n = a.length;
@@ -410,6 +536,9 @@ function loadSettings(){
     if(typeof j.soundOn === 'boolean') S.soundOn = j.soundOn;
     if(typeof j.showMoveNum === 'boolean') S.showMoveNum = j.showMoveNum;
     if(typeof j.squareMode === 'boolean') S.squareMode = j.squareMode;
+    if(typeof j.blackName === 'string') S.blackName = j.blackName;
+    if(typeof j.whiteName === 'string') S.whiteName = j.whiteName;
+    if(typeof j.gameName === 'string') S.gameName = j.gameName;
     if(j.selectedCamId) S.selectedCamId = j.selectedCamId;
   }catch(e){}
 }
@@ -429,6 +558,9 @@ function saveSettings(){
       soundOn: S.soundOn,
       showMoveNum: S.showMoveNum,
       squareMode: S.squareMode,
+      blackName: S.blackName,
+      whiteName: S.whiteName,
+      gameName: S.gameName,
       selectedCamId: S.selectedCamId,
     }));
   }catch(e){}
@@ -578,14 +710,7 @@ function resizeOverlay(){
 }
 window.addEventListener('resize', ()=>{
   if(S.mode==='broadcast'){ resizeOverlay(); drawBoardCanvas('boardB'); }
-  else if(S.mode==='view' && S.vLatestState){
-    drawBoardCanvas('boardV', {
-      size: S.vLatestState.size,
-      committed: S.vLatestState.committed,
-      lastMove: S.vLatestState.moves && S.vLatestState.moves.length ? S.vLatestState.moves[S.vLatestState.moves.length-1] : null,
-      moves: S.vLatestState.moves,
-    });
-  }
+  else if(S.mode==='view' && S.vLatestState){ renderViewerBoard(); }
 });
 
 function videoDisplayRect(){
@@ -876,7 +1001,13 @@ function pushHistory(i, j, val){
 }
 function commitFromHistory(){
   const N = S.size, K = S.histDepth;
+  // Normal vote threshold (70%). Used when adding a stone or keeping the same
+  // class. Reverting an already-committed stone back to empty (or flipping
+  // between black and white) requires a stronger majority (90%): this makes
+  // brief noise — a momentary flicker from a glare or partial occlusion —
+  // unable to wipe out a stone that has been stable for a while.
   const minVotes = Math.max(2, Math.ceil(K * 0.7));
+  const strongVotes = Math.max(2, Math.ceil(K * 0.9));
   for(let i=0;i<N;i++){
     for(let j=0;j<N;j++){
       const buf = S.history[i][j];
@@ -887,9 +1018,11 @@ function commitFromHistory(){
         if(v==='B') cB++; else if(v==='W') cW++; else cE++;
       }
       const top = Math.max(cB, cW, cE);
-      if(top >= Math.min(minVotes, buf.length)){
-        const newVal = (top===cB)?'B':(top===cW)?'W':'.';
-        S.committed[i][j] = newVal;
+      const candidate = (top===cB)?'B':(top===cW)?'W':'.';
+      const cur = S.committed[i][j];
+      const needed = (cur === '.' || cur === candidate) ? minVotes : strongVotes;
+      if(top >= Math.min(needed, buf.length)){
+        S.committed[i][j] = candidate;
       }
     }
   }
@@ -1036,6 +1169,8 @@ function detectFrame(){
       Ss[i*N + j] = sn > 0 ? ssum / sn : 0;
     }
   }
+  // Stash the latest per-cell samples so the "空の盤面を記録" button can use them.
+  S._lastVs = Vs; S._lastSs = Ss;
   // Estimate board reference brightness as median of all intersections.
   // Most points are empty (= wood) for typical positions, so median ≈ wood V.
   const Vall = Array.from(Vs);
@@ -1045,44 +1180,91 @@ function detectFrame(){
   // "white" candidates here. The board wood itself is moderately saturated
   // (~0.3-0.5 brown), so this also helps avoid calling bright wood "W".
   const W_SAT_MAX = 0.30;
-  // Pass 1: classify with the global reference
-  const cls1 = new Array(N);
-  for(let i=0;i<N;i++){
-    cls1[i] = new Array(N);
-    for(let j=0;j<N;j++){
-      const v = Vs[i*N + j];
-      const s = Ss[i*N + j];
-      cls1[i][j] = (v < ref - S.blackTh) ? 'B'
-                 : (v > ref + S.whiteTh && s < W_SAT_MAX) ? 'W'
-                 : '.';
-    }
-  }
-  // Pass 2: refine with a local reference computed from nearby cells
-  // classified as empty in pass 1. Helps boards with non-uniform lighting
-  // (window light on one side, etc.). Falls back to the global ref when no
-  // empty neighbours exist (highly populated region).
+  // If we have a recorded empty-board reference for the current board size,
+  // use it directly as the per-cell baseline. This handles wood-grain knots,
+  // persistent shadows, and bowl/lid placement under the camera much better
+  // than the running median.
+  const haveRef = !!(S.refBoard && S.refBoard.size === N && S.refBoard.V && S.refBoard.V.length === N*N);
+  const haveCalib = !!(S.stoneCalib && S.stoneCalib.size === N);
   const cls = new Array(N);
-  const radius = 2;
-  const tmp = [];
-  for(let i=0;i<N;i++){
-    cls[i] = new Array(N);
-    for(let j=0;j<N;j++){
-      tmp.length = 0;
-      for(let di=-radius; di<=radius; di++){
-        const ni = i+di;
-        if(ni<0||ni>=N) continue;
-        for(let dj=-radius; dj<=radius; dj++){
-          const nj = j+dj;
-          if(nj<0||nj>=N) continue;
-          if(cls1[ni][nj] === '.') tmp.push(Vs[ni*N + nj]);
-        }
+  if(haveCalib){
+    // 3-way nearest-anchor classification: each cell's V is compared to the
+    // learned black anchor, white anchor and the per-cell empty baseline (or
+    // global median if no empty-board reference has been captured). A small
+    // margin keeps borderline noise classified as empty.
+    const c = S.stoneCalib;
+    const refV = haveRef ? S.refBoard.V : null;
+    const satGate = Math.max(W_SAT_MAX, c.whiteS + 0.05);
+    const halfBlack = Math.abs(ref - c.blackV);
+    const halfWhite = Math.abs(c.whiteV - ref);
+    const baseMargin = Math.max(6, Math.min(halfBlack, halfWhite) * 0.10);
+    for(let i=0;i<N;i++){
+      cls[i] = new Array(N);
+      for(let j=0;j<N;j++){
+        const v = Vs[i*N + j];
+        const s = Ss[i*N + j];
+        const empV = refV ? refV[i*N + j] : ref;
+        const dE = Math.abs(v - empV);
+        const dB = Math.abs(v - c.blackV);
+        const dW = Math.abs(v - c.whiteV);
+        let val = '.';
+        if(dB < dW && dB + baseMargin < dE) val = 'B';
+        else if(dW < dB && dW + baseMargin < dE && s < satGate) val = 'W';
+        cls[i][j] = val;
       }
-      const lref = tmp.length >= 4 ? median(tmp) : ref;
-      const v = Vs[i*N + j];
-      const s = Ss[i*N + j];
-      cls[i][j] = (v < lref - S.blackTh) ? 'B'
-                : (v > lref + S.whiteTh && s < W_SAT_MAX) ? 'W'
-                : '.';
+    }
+  } else if(haveRef){
+    const refV = S.refBoard.V;
+    for(let i=0;i<N;i++){
+      cls[i] = new Array(N);
+      for(let j=0;j<N;j++){
+        const v = Vs[i*N + j];
+        const s = Ss[i*N + j];
+        const r = refV[i*N + j];
+        cls[i][j] = (v < r - S.blackTh) ? 'B'
+                  : (v > r + S.whiteTh && s < W_SAT_MAX) ? 'W'
+                  : '.';
+      }
+    }
+  } else {
+    // Pass 1: classify with the global reference
+    const cls1 = new Array(N);
+    for(let i=0;i<N;i++){
+      cls1[i] = new Array(N);
+      for(let j=0;j<N;j++){
+        const v = Vs[i*N + j];
+        const s = Ss[i*N + j];
+        cls1[i][j] = (v < ref - S.blackTh) ? 'B'
+                   : (v > ref + S.whiteTh && s < W_SAT_MAX) ? 'W'
+                   : '.';
+      }
+    }
+    // Pass 2: refine with a local reference computed from nearby cells
+    // classified as empty in pass 1. Helps boards with non-uniform lighting
+    // (window light on one side, etc.). Falls back to the global ref when no
+    // empty neighbours exist (highly populated region).
+    const radius = 2;
+    const tmp = [];
+    for(let i=0;i<N;i++){
+      cls[i] = new Array(N);
+      for(let j=0;j<N;j++){
+        tmp.length = 0;
+        for(let di=-radius; di<=radius; di++){
+          const ni = i+di;
+          if(ni<0||ni>=N) continue;
+          for(let dj=-radius; dj<=radius; dj++){
+            const nj = j+dj;
+            if(nj<0||nj>=N) continue;
+            if(cls1[ni][nj] === '.') tmp.push(Vs[ni*N + nj]);
+          }
+        }
+        const lref = tmp.length >= 4 ? median(tmp) : ref;
+        const v = Vs[i*N + j];
+        const s = Ss[i*N + j];
+        cls[i][j] = (v < lref - S.blackTh) ? 'B'
+                  : (v > lref + S.whiteTh && s < W_SAT_MAX) ? 'W'
+                  : '.';
+      }
     }
   }
   // On the first frame after the settle gate releases, snap the history to
@@ -1133,8 +1315,8 @@ function detectFrame(){
     }
   }
   commitFromHistory();
-  // Move tracking
-  if(S.trackMoves) trackMoves();
+  // Move tracking — only after the broadcaster has pressed 開始
+  if(S.trackMoves && S.gameStarted) trackMoves();
   // Counts
   let bc=0, wc=0;
   for(let i=0;i<N;i++) for(let j=0;j<N;j++){
@@ -1201,8 +1383,11 @@ function trackMoves(){
     S.suspiciousFrames = 0;
     return;
   }
-  if(bDelta > 1 || wDelta > 1){
-    // Likely recognition flicker; wait. If it persists too long, force-resync.
+  // Allow several simultaneous changes per frame: when the broadcaster freezes
+  // for a couple of seconds at a time, a sequence of ordinary moves (e.g. a ko
+  // exchange or threat-and-response) can land in one diff. We only treat a diff
+  // as recognition noise if it is implausibly large.
+  if(newOnes.length > 6){
     S.suspiciousFrames++;
     if(S.suspiciousFrames > 40){
       syncPrevToCommitted();
@@ -1212,14 +1397,23 @@ function trackMoves(){
     return;
   }
   S.suspiciousFrames = 0;
-  // If both colors moved between samples (rare, only possible with very low FPS), record B first.
+  // Interleave the new stones based on whose turn it most likely was, so a
+  // batch of B/W changes lands in the SGF in a believable order.
   const bs = newOnes.filter(m=>m.c==='B');
   const ws = newOnes.filter(m=>m.c==='W');
-  for(const m of bs) S.moves.push({c:m.c, x:m.x, y:m.y, t: Date.now()});
-  for(const m of ws) S.moves.push({c:m.c, x:m.x, y:m.y, t: Date.now()});
+  const ordered = [];
+  let cur = S.turn === 'W' ? 'W' : 'B';
+  while(bs.length || ws.length){
+    if(cur === 'B' && bs.length){ ordered.push(bs.shift()); cur = 'W'; }
+    else if(cur === 'W' && ws.length){ ordered.push(ws.shift()); cur = 'B'; }
+    else if(bs.length){ ordered.push(bs.shift()); cur = 'W'; }
+    else { ordered.push(ws.shift()); cur = 'B'; }
+  }
+  const ts = Date.now();
+  for(const m of ordered) S.moves.push({c:m.c, x:m.x, y:m.y, t: ts});
   syncPrevToCommitted();
   $('moveCount').textContent = S.moves.length;
-  S.lastMoveTime = Date.now();
+  S.lastMoveTime = ts;
   playStoneClick();
 }
 
@@ -1332,15 +1526,33 @@ function drawBoardCanvas(canvasId, override){
         ctx.fillText(String(k+1), x, y);
       }
     }
-    // Last move marker
-    const last = (override && override.lastMove) || (S.moves.length ? S.moves[S.moves.length-1] : null);
-    if(last && stones[last.x] && stones[last.x][last.y] === last.c){
+    // Last move marker — drawn as a glowing ring along the *outside edge* of
+    // the stone so the move number in the centre stays clearly readable. If
+    // the stone has been captured (ko etc.), draw the ring on the empty
+    // intersection at stone size so the position is still obvious.
+    const last = (override && override.lastMove) || (moves && moves.length ? moves[moves.length-1] : null);
+    if(last && last.x != null && last.y != null && last.x >= 0 && last.x < N && last.y >= 0 && last.y < N){
       const x = margin + last.x*step;
       const y = margin + last.y*step;
-      ctx.beginPath(); ctx.arc(x, y, step*0.18, 0, Math.PI*2);
-      ctx.strokeStyle = last.c==='B' ? '#ff5e3a' : '#d2421f';
-      ctx.lineWidth = Math.max(2, step*0.06);
+      const r = stoneR;
+      // Soft outer halo
+      ctx.beginPath();
+      ctx.arc(x, y, r * 1.15, 0, Math.PI*2);
+      ctx.strokeStyle = 'rgba(255,45,45,0.45)';
+      ctx.lineWidth = Math.max(2, step*0.08);
       ctx.stroke();
+      // Crisp ring hugging the stone's outline
+      ctx.beginPath();
+      ctx.arc(x, y, r * 0.98, 0, Math.PI*2);
+      ctx.strokeStyle = '#ff2d2d';
+      ctx.lineWidth = Math.max(2, step*0.07);
+      ctx.stroke();
+      // Tiny corner tick at top-right so the marker is still visible if two
+      // last-move rings happen to land on adjacent points
+      ctx.beginPath();
+      ctx.arc(x + r*0.72, y - r*0.72, Math.max(1.5, step*0.06), 0, Math.PI*2);
+      ctx.fillStyle = '#ff2d2d';
+      ctx.fill();
     }
   }
 }
@@ -1382,9 +1594,18 @@ function sgfCoord(x, y){
   // SGF columns/rows: 0..N-1 → 'a'..  (no skip)
   return String.fromCharCode(97 + x) + String.fromCharCode(97 + y);
 }
-function buildSGFFrom(N, initialBoard, currentBoard, moves, turn){
+function sgfText(s){
+  // Escape SGF SimpleText: \ and ] must be backslash-escaped; collapse newlines.
+  return String(s).replace(/\\/g, '\\\\').replace(/\]/g, '\\]').replace(/[\r\n]+/g, ' ');
+}
+function buildSGFFrom(N, initialBoard, currentBoard, moves, turn, meta){
   const date = new Date().toISOString().slice(0,10);
   let body = `(;FF[4]GM[1]CA[UTF-8]SZ[${N}]DT[${date}]AP[GoBoardCameraStream:1.0]`;
+  if(meta){
+    if(meta.gameName) body += `GN[${sgfText(meta.gameName)}]`;
+    if(meta.blackName) body += `PB[${sgfText(meta.blackName)}]`;
+    if(meta.whiteName) body += `PW[${sgfText(meta.whiteName)}]`;
+  }
   const initial = initialBoard || currentBoard;
   if(initial){
     const ab = [], aw = [];
@@ -1418,7 +1639,8 @@ function generateSGF(){
   const N = S.size;
   const initial = (S.trackMoves && S.movesInitialized && S.initialPosition) ? S.initialPosition : null;
   const moves = S.trackMoves ? S.moves : null;
-  const text = buildSGFFrom(N, initial, S.committed, moves, S.turn);
+  const meta = { blackName: S.blackName, whiteName: S.whiteName, gameName: S.gameName };
+  const text = buildSGFFrom(N, initial, S.committed, moves, S.turn, meta);
   downloadSGF(text, 'goboard');
   toast('SGF をダウンロードしました');
 }
@@ -1496,13 +1718,18 @@ function startPeerHost(forceNewId){
   });
 }
 function snapshotState(){
+  const tracking = S.trackMoves && S.gameStarted;
   return {
     type: 'state',
     size: S.size,
     committed: S.committed,
-    moves: S.trackMoves ? S.moves : [],
-    initialPosition: (S.trackMoves && S.movesInitialized) ? S.initialPosition : null,
+    moves: tracking ? S.moves : [],
+    initialPosition: (tracking && S.movesInitialized) ? S.initialPosition : null,
+    started: S.gameStarted,
     turn: S.turn,
+    blackName: S.blackName || '',
+    whiteName: S.whiteName || '',
+    gameName: S.gameName || '',
     ts: Date.now(),
   };
 }
@@ -1546,6 +1773,155 @@ function startPeerViewer(shortId){
     try{ S.peer.reconnect(); }catch(e){}
   });
 }
+// Apply a sequence of moves to a starting board, following Go capture rules
+// (remove enemy groups with no liberties; if the just-placed stone's own group
+// has no liberties after captures, remove it too — covers suicide, although
+// most rulesets forbid it). Used by the viewer to reconstruct intermediate
+// board positions for the playback slider.
+function applyMoves(initial, moves, upTo){
+  const N = initial.length;
+  const board = initial.map(row => row.slice());
+  const lim = Math.max(0, Math.min(upTo|0, moves ? moves.length : 0));
+  const nbrs = [[1,0],[-1,0],[0,1],[0,-1]];
+  function clearIfDead(sx, sy, color){
+    const stack = [[sx, sy]];
+    const seen = new Set();
+    const group = [];
+    let alive = false;
+    while(stack.length){
+      const [cx, cy] = stack.pop();
+      const key = cx*N + cy;
+      if(seen.has(key)) continue;
+      seen.add(key);
+      group.push([cx, cy]);
+      for(const [dx, dy] of nbrs){
+        const ex = cx+dx, ey = cy+dy;
+        if(ex<0||ex>=N||ey<0||ey>=N) continue;
+        const v = board[ex][ey];
+        if(v === '.') { alive = true; }
+        else if(v === color && !seen.has(ex*N + ey)) stack.push([ex, ey]);
+      }
+    }
+    if(!alive){ for(const [gx, gy] of group) board[gx][gy] = '.'; }
+  }
+  for(let k=0; k<lim; k++){
+    const mv = moves[k];
+    if(!mv) continue;
+    const x = mv.x, y = mv.y, c = mv.c;
+    if(x == null || y == null || x < 0 || x >= N || y < 0 || y >= N) continue;
+    if(c !== 'B' && c !== 'W') continue;
+    board[x][y] = c;
+    const opp = c === 'B' ? 'W' : 'B';
+    for(const [dx, dy] of nbrs){
+      const nx = x+dx, ny = y+dy;
+      if(nx<0||nx>=N||ny<0||ny>=N) continue;
+      if(board[nx][ny] === opp) clearIfDead(nx, ny, opp);
+    }
+    if(board[x][y] === c) clearIfDead(x, y, c);
+  }
+  return board;
+}
+
+function viewerTotalMoves(){
+  return S.vLatestState && S.vLatestState.moves ? S.vLatestState.moves.length : 0;
+}
+
+function renderViewerBoard(){
+  const data = S.vLatestState;
+  if(!data){
+    drawBoardCanvas('boardV', { size: S.size, committed: null });
+    $('vMoveLabel').textContent = '0';
+    $('vMoveTotal').textContent = '0';
+    return;
+  }
+  const N = data.size;
+  const total = (data.moves || []).length;
+  if(S.vAtLive) S.vViewIndex = total;
+  const idx = Math.max(0, Math.min(S.vViewIndex|0, total));
+  let board;
+  if(idx === total){
+    // Live: show the broadcaster's actually-recognized state. This is what the
+    // broadcaster sees, including any cells they manually corrected.
+    board = data.committed;
+  } else {
+    // Replay: reconstruct the board from initial position + recorded moves so
+    // captures (and ko cycles) come out correctly.
+    const initial = data.initialPosition || Array.from({length:N}, ()=>Array.from({length:N}, ()=>'.'));
+    board = applyMoves(initial, data.moves || [], idx);
+  }
+  const lastMove = idx > 0 ? (data.moves || [])[idx-1] : null;
+  drawBoardCanvas('boardV', {
+    size: N,
+    committed: board,
+    lastMove: lastMove,
+    moves: (data.moves || []).slice(0, idx),
+  });
+  let bc=0, wc=0;
+  for(const row of board) for(const c of row){
+    if(c==='B') bc++; else if(c==='W') wc++;
+  }
+  $('vBCount').textContent = bc;
+  $('vWCount').textContent = wc;
+  $('vMoveCount').textContent = total;
+  $('vMoveLabel').textContent = idx;
+  $('vMoveTotal').textContent = total;
+  if(data.started === false){
+    $('vTurn').textContent = '対局前（カウント前）';
+    $('vTurn').style.color = '#f4d03f';
+  } else {
+    $('vTurn').textContent = '';
+    $('vTurn').style.color = '';
+  }
+  const pEl = $('vPlayers');
+  if(pEl){
+    const b = (data.blackName||'').trim();
+    const w = (data.whiteName||'').trim();
+    const g = (data.gameName||'').trim();
+    if(b || w || g){
+      const line1 = g ? `<div><b>${escapeHtml(g)}</b></div>` : '';
+      const line2 = (b || w) ? `<div>●${escapeHtml(b || '黒')} vs ${escapeHtml(w || '白')}○</div>` : '';
+      pEl.innerHTML = line1 + line2;
+      pEl.style.display = '';
+    } else {
+      pEl.innerHTML = '';
+      pEl.style.display = 'none';
+    }
+  }
+  const sl = $('vSlider');
+  if(+sl.max !== total) sl.max = total;
+  if(+sl.value !== idx) sl.value = idx;
+  // Turn indicator reflects the position being shown
+  if(lastMove){
+    const nextTurn = lastMove.c === 'B' ? 'W' : 'B';
+    $('vTurn').innerHTML = '手番: <b>' + (nextTurn==='B'?'黒●':'白○') + '</b>';
+  } else if(data.turn){
+    $('vTurn').innerHTML = '手番: <b>' + (data.turn==='B'?'黒●':'白○') + '</b>';
+  }
+  // Live badge
+  const live = $('vToLive');
+  if(live) live.classList.toggle('on', S.vAtLive);
+}
+
+function viewerStopPlayback(){
+  S.vIsPlaying = false;
+  if(S.vPlayHandle){ clearInterval(S.vPlayHandle); S.vPlayHandle = null; }
+  const btn = $('vPlay');
+  if(btn){ btn.textContent = '▶'; btn.classList.remove('on'); }
+}
+function viewerStartPlayback(){
+  if(S.vIsPlaying) return;
+  S.vIsPlaying = true;
+  S.vAtLive = false;
+  const btn = $('vPlay');
+  if(btn){ btn.textContent = '⏸'; btn.classList.add('on'); }
+  S.vPlayHandle = setInterval(()=>{
+    const total = viewerTotalMoves();
+    if(S.vViewIndex >= total){ viewerStopPlayback(); return; }
+    S.vViewIndex = Math.min(total, S.vViewIndex + 1);
+    renderViewerBoard();
+  }, 900);
+}
+
 function connectToHost(shortId){
   if(!S.peer) return;
   const targetId = PEER_PREFIX + shortId;
@@ -1558,25 +1934,12 @@ function connectToHost(shortId){
   conn.on('data', (data)=>{
     if(data && data.type === 'state'){
       S.vLatestState = data;
-      drawBoardCanvas('boardV', {
-        size: data.size,
-        committed: data.committed,
-        lastMove: data.moves && data.moves.length ? data.moves[data.moves.length-1] : null,
-        moves: data.moves,
-      });
-      let bc=0, wc=0;
-      for(const row of data.committed) for(const c of row){
-        if(c==='B') bc++; else if(c==='W') wc++;
-      }
-      $('vBCount').textContent = bc;
-      $('vWCount').textContent = wc;
       const mvCount = (data.moves||[]).length;
-      if(mvCount > S.vPrevMoveCount && S.vPrevMoveCount > 0){
+      if(mvCount > S.vPrevMoveCount && S.vPrevMoveCount > 0 && S.vAtLive){
         playStoneClick();
       }
       S.vPrevMoveCount = mvCount;
-      $('vMoveCount').textContent = mvCount;
-      $('vTurn').innerHTML = '手番: <b>' + (data.turn==='B'?'黒●':'白○') + '</b>';
+      renderViewerBoard();
       const lat = data.ts ? Math.max(0, Date.now() - data.ts) : null;
       const latStr = lat !== null ? '  遅延 ' + lat + 'ms' : '';
       setVStatus('受信中  ' + new Date().toLocaleTimeString() + latStr, 'connected');
@@ -1643,7 +2006,11 @@ async function enterBroadcast(){
   S.movesInitialized = false;
   S.initialPosition = null;
   S.suspiciousFrames = 0;
+  S.gameStarted = false;
   $('moveCount').textContent = 0;
+  updateGameStateUI();
+  updateRefBoardUI();
+  updateStoneCalibUI();
   // Sync UI to settings
   $('blackTh').value = S.blackTh; $('blackVal').textContent = S.blackTh;
   $('whiteTh').value = S.whiteTh; $('whiteVal').textContent = S.whiteTh;
@@ -1656,6 +2023,9 @@ async function enterBroadcast(){
   $('trackMoves').checked = S.trackMoves;
   $('soundOn').checked = S.soundOn;
   $('showMoveNum').checked = S.showMoveNum;
+  $('blackName').value = S.blackName || '';
+  $('whiteName').value = S.whiteName || '';
+  $('gameName').value = S.gameName || '';
   setActiveSize(S.size);
   drawBoardCanvas('boardB');
   await listCameras();
@@ -1705,10 +2075,19 @@ function exitBroadcast(){
 }
 function enterView(shortId){
   showScreen('viewScreen');
+  S.vViewIndex = 0;
+  S.vAtLive = true;
+  S.vIsPlaying = false;
+  S.vPrevMoveCount = 0;
+  if(S.vPlayHandle){ clearInterval(S.vPlayHandle); S.vPlayHandle = null; }
+  $('vSlider').max = 0; $('vSlider').value = 0;
+  $('vMoveLabel').textContent = '0';
+  $('vMoveTotal').textContent = '0';
   startPeerViewer(shortId);
   drawBoardCanvas('boardV', { size: S.size, committed: null });
 }
 function exitView(){
+  viewerStopPlayback();
   if(S.conn){ try{ S.conn.close(); }catch(e){} S.conn = null; }
   if(S.peer){ try{ S.peer.destroy(); }catch(e){} S.peer = null; }
   clearTimeout(S.reconnectTimer);
@@ -1727,7 +2106,13 @@ function changeSize(n){
   S.movesInitialized = false;
   S.initialPosition = null;
   S.suspiciousFrames = 0;
+  S.gameStarted = false;
+  S.refBoard = null;
+  S.stoneCalib = null;
   $('moveCount').textContent = 0;
+  updateGameStateUI();
+  updateRefBoardUI();
+  updateStoneCalibUI();
   setActiveSize(n);
   drawBoardCanvas('boardB');
   drawOverlay();
@@ -1821,11 +2206,29 @@ function init(){
     if(S.soundOn) playStoneClick();
   });
   $('showMoveNum').addEventListener('change', e=>{ S.showMoveNum = e.target.checked; saveSettings(); drawBoardCanvas('boardB'); });
+  function onPlayerNameChange(){
+    S.blackName = $('blackName').value.trim();
+    S.whiteName = $('whiteName').value.trim();
+    S.gameName = $('gameName').value.trim();
+    saveSettings();
+    broadcastState();
+  }
+  $('blackName').addEventListener('input', onPlayerNameChange);
+  $('whiteName').addEventListener('input', onPlayerNameChange);
+  $('gameName').addEventListener('input', onPlayerNameChange);
   $('btnReset').addEventListener('click', ()=>{
     S.corners = defaultCorners();
     initDetectionState();
     S.movesInitialized = false;
     S.initialPosition = null;
+    S.gameStarted = false;
+    S.moves = [];
+    S.refBoard = null;
+    S.stoneCalib = null;
+    $('moveCount').textContent = 0;
+    updateGameStateUI();
+    updateRefBoardUI();
+    updateStoneCalibUI();
     saveSettings();
     drawOverlay();
     toast('隅をリセットしました - ドラッグで合わせて下さい');
@@ -1837,34 +2240,138 @@ function init(){
     initDetectionState();
     S.movesInitialized = false;
     S.initialPosition = null;
+    S.gameStarted = false;
+    S.moves = [];
+    S.refBoard = null;
+    S.stoneCalib = null;
+    $('moveCount').textContent = 0;
+    updateGameStateUI();
+    updateRefBoardUI();
+    updateStoneCalibUI();
     saveSettings();
     drawOverlay();
     toast('盤を90°回転しました');
   });
-  $('btnClearMoves').addEventListener('click', ()=>{
-    S.moves = [];
-    $('moveCount').textContent = 0;
-    S.movesInitialized = false;
-    S.initialPosition = null;
-    S.suspiciousFrames = 0;
-    toast('履歴をクリア。次の安定検出を初期局面とします');
-  });
-  $('btnSetInitial').addEventListener('click', ()=>{
+  $('btnStart').addEventListener('click', ()=>{
     if(!S.committed){ toast('まだ盤面が認識されていません', true); return; }
     S.initialPosition = snapshotCommitted();
     syncPrevToCommitted();
     S.movesInitialized = true;
     S.moves = [];
     S.suspiciousFrames = 0;
+    S.gameStarted = true;
     $('moveCount').textContent = 0;
-    toast('現在の局面を初手前として設定');
+    updateGameStateUI();
+    drawBoardCanvas('boardB');
+    broadcastState();
+    toast('ゲーム開始 - ここからカウントします');
+  });
+  $('btnRestart').addEventListener('click', ()=>{
+    if(!S.committed){ toast('まだ盤面が認識されていません', true); return; }
+    if(!confirm('現在の手数をリセットして、いまの盤面を1手目の前として始め直しますか？')) return;
+    S.initialPosition = snapshotCommitted();
+    syncPrevToCommitted();
+    S.movesInitialized = true;
+    S.moves = [];
+    S.suspiciousFrames = 0;
+    S.gameStarted = true;
+    $('moveCount').textContent = 0;
+    updateGameStateUI();
+    drawBoardCanvas('boardB');
+    broadcastState();
+    toast('初期状態に戻しました（1手目から）');
   });
   $('btnRecalib').addEventListener('click', ()=>{
     initDetectionState();
     S.movesInitialized = false;
     S.initialPosition = null;
     S.suspiciousFrames = 0;
-    toast('検出履歴をクリアしました');
+    S.gameStarted = false;
+    S.moves = [];
+    $('moveCount').textContent = 0;
+    updateGameStateUI();
+    toast('検出履歴をクリア - 改めて「開始」を押してください');
+  });
+  $('btnCaptureRef').addEventListener('click', ()=>{
+    if(!S._lastVs || S._lastVs.length !== S.size*S.size){
+      toast('まだ盤面が認識できていません', true);
+      return;
+    }
+    if(!S.committed){ toast('まだ盤面が認識されていません', true); return; }
+    let stoneCount = 0;
+    for(const row of S.committed) for(const c of row) if(c !== '.') stoneCount++;
+    if(stoneCount > 0 && !confirm(`現在 ${stoneCount} 個の石が認識されています。盤面を空にしてから押してください。それでも記録しますか？`)) return;
+    S.refBoard = {
+      size: S.size,
+      V: new Float32Array(S._lastVs),
+      S: new Float32Array(S._lastSs),
+      ts: Date.now(),
+    };
+    initDetectionState();
+    S.gameStarted = false;
+    S.moves = [];
+    S.movesInitialized = false;
+    S.initialPosition = null;
+    $('moveCount').textContent = 0;
+    updateGameStateUI();
+    updateRefBoardUI();
+    toast('空の盤面を記録しました - これを基準に判定します');
+  });
+  $('btnClearRef').addEventListener('click', ()=>{
+    S.refBoard = null;
+    initDetectionState();
+    S.gameStarted = false;
+    S.moves = [];
+    S.movesInitialized = false;
+    S.initialPosition = null;
+    $('moveCount').textContent = 0;
+    updateGameStateUI();
+    updateRefBoardUI();
+    toast('基準をクリア - 自動の局所基準で判定します');
+  });
+  $('btnCalibStones').addEventListener('click', ()=>{
+    const N = S.size;
+    const sp = CORNER_STAR_POINTS[N];
+    if(!sp){ toast(N+'路盤の星座標が未登録です', true); return; }
+    if(!S._lastVs || S._lastVs.length !== N*N){ toast('まだ盤面が認識できていません', true); return; }
+    const ok = confirm(
+      '黒石と白石を以下の星に置いてから OK を押してください:\n\n' +
+      '●黒石: 右上 / 右下 の星\n' +
+      '○白石: 左上 / 左下 の星\n\n' +
+      '（合計4個。星の真上に正確に置いてください）'
+    );
+    if(!ok) return;
+    let bV = 0, wV = 0, bS = 0, wS = 0;
+    for(const [i,j] of sp.black){ bV += S._lastVs[i*N+j]; bS += S._lastSs[i*N+j]; }
+    for(const [i,j] of sp.white){ wV += S._lastVs[i*N+j]; wS += S._lastSs[i*N+j]; }
+    bV /= sp.black.length; bS /= sp.black.length;
+    wV /= sp.white.length; wS /= sp.white.length;
+    if(bV >= wV - 20){
+      toast('明るさの差が小さすぎます。黒白を逆に置いていませんか？', true);
+      return;
+    }
+    S.stoneCalib = { size: N, blackV: bV, whiteV: wV, blackS: bS, whiteS: wS, ts: Date.now() };
+    initDetectionState();
+    S.gameStarted = false;
+    S.moves = [];
+    S.movesInitialized = false;
+    S.initialPosition = null;
+    $('moveCount').textContent = 0;
+    updateGameStateUI();
+    updateStoneCalibUI();
+    toast(`黒白の見本を記録（黒V=${bV.toFixed(0)} / 白V=${wV.toFixed(0)}）`);
+  });
+  $('btnClearCalib').addEventListener('click', ()=>{
+    S.stoneCalib = null;
+    initDetectionState();
+    S.gameStarted = false;
+    S.moves = [];
+    S.movesInitialized = false;
+    S.initialPosition = null;
+    $('moveCount').textContent = 0;
+    updateGameStateUI();
+    updateStoneCalibUI();
+    toast('黒白の見本をクリアしました');
   });
   $('btnSGF').addEventListener('click', generateSGF);
   $('btnPng').addEventListener('click', ()=>{
@@ -1931,19 +2438,58 @@ function init(){
     S.showMoveNum = !S.showMoveNum;
     saveSettings();
     syncViewerToggleLabels();
-    if(S.vLatestState){
-      drawBoardCanvas('boardV', {
-        size: S.vLatestState.size,
-        committed: S.vLatestState.committed,
-        lastMove: S.vLatestState.moves && S.vLatestState.moves.length ? S.vLatestState.moves[S.vLatestState.moves.length-1] : null,
-        moves: S.vLatestState.moves,
-      });
+    if(S.vLatestState) renderViewerBoard();
+  });
+  // Player controls
+  $('vToStart').addEventListener('click', ()=>{
+    viewerStopPlayback();
+    S.vAtLive = false;
+    S.vViewIndex = 0;
+    renderViewerBoard();
+  });
+  $('vBack').addEventListener('click', ()=>{
+    viewerStopPlayback();
+    S.vAtLive = false;
+    S.vViewIndex = Math.max(0, S.vViewIndex - 1);
+    renderViewerBoard();
+  });
+  $('vFwd').addEventListener('click', ()=>{
+    const total = viewerTotalMoves();
+    S.vViewIndex = Math.min(total, S.vViewIndex + 1);
+    S.vAtLive = (S.vViewIndex === total);
+    renderViewerBoard();
+  });
+  $('vToLive').addEventListener('click', ()=>{
+    viewerStopPlayback();
+    S.vAtLive = true;
+    S.vViewIndex = viewerTotalMoves();
+    renderViewerBoard();
+  });
+  $('vPlay').addEventListener('click', ()=>{
+    if(S.vIsPlaying){ viewerStopPlayback(); }
+    else {
+      // If we're already at the live end, restart from beginning
+      if(S.vAtLive || S.vViewIndex >= viewerTotalMoves()){
+        S.vViewIndex = 0;
+        S.vAtLive = false;
+        renderViewerBoard();
+      }
+      viewerStartPlayback();
     }
+  });
+  $('vSlider').addEventListener('input', e=>{
+    viewerStopPlayback();
+    const total = viewerTotalMoves();
+    S.vViewIndex = Math.max(0, Math.min(total, +e.target.value));
+    S.vAtLive = (S.vViewIndex === total);
+    renderViewerBoard();
   });
   $('vSgfBtn').addEventListener('click', ()=>{
     if(!S.vLatestState){ toast('盤面データがまだ届いていません', true); return; }
     const d = S.vLatestState;
-    const text = buildSGFFrom(d.size, d.initialPosition || null, d.committed, d.moves, d.turn);
+    const text = buildSGFFrom(d.size, d.initialPosition || null, d.committed, d.moves, d.turn, {
+      blackName: d.blackName, whiteName: d.whiteName, gameName: d.gameName
+    });
     downloadSGF(text, 'goboard_view');
     toast('SGFをダウンロード');
   });
