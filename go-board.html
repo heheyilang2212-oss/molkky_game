@@ -914,7 +914,7 @@ function detectFrame(){
 
   // 1st pass: compute median V at each intersection
   const Vs = new Float32Array(N*N);
-  const Ss = new Float32Array(N*N);  // saturation proxy (max-min)/max
+  const Ss = new Float32Array(N*N);  // mean saturation (max-min)/max across patch
   const buf = []; // temp for per-patch sort
   for(let i=0;i<N;i++){
     const u = i/(N-1);
@@ -923,7 +923,7 @@ function detectFrame(){
       const p = Hg(u, vN);
       const cx = p.x|0, cy = p.y|0;
       buf.length = 0;
-      let smax = 0;
+      let ssum = 0, sn = 0;
       for(let dy=-patchR; dy<=patchR; dy++){
         const y = cy + dy;
         if(y < 0 || y >= H) continue;
@@ -937,25 +937,33 @@ function detectFrame(){
           const mn = r<g?(r<b?r:b):(g<b?g:b);
           buf.push(mx);
           const s = mx>0 ? (mx-mn)/mx : 0;
-          if(s > smax) smax = s;
+          ssum += s; sn++;
         }
       }
       const m = median(buf);
       Vs[i*N + j] = m;
-      Ss[i*N + j] = smax;
+      Ss[i*N + j] = sn > 0 ? ssum / sn : 0;
     }
   }
   // Estimate board reference brightness as median of all intersections.
   // Most points are empty (= wood) for typical positions, so median ≈ wood V.
   const Vall = Array.from(Vs);
   const ref = median(Vall);
+  // A real white stone is nearly grayscale (low saturation). Light reflections
+  // and yellow/warm glares often have high saturation, so we reject them as
+  // "white" candidates here. The board wood itself is moderately saturated
+  // (~0.3-0.5 brown), so this also helps avoid calling bright wood "W".
+  const W_SAT_MAX = 0.30;
   // Pass 1: classify with the global reference
   const cls1 = new Array(N);
   for(let i=0;i<N;i++){
     cls1[i] = new Array(N);
     for(let j=0;j<N;j++){
       const v = Vs[i*N + j];
-      cls1[i][j] = (v < ref - S.blackTh) ? 'B' : (v > ref + S.whiteTh) ? 'W' : '.';
+      const s = Ss[i*N + j];
+      cls1[i][j] = (v < ref - S.blackTh) ? 'B'
+                 : (v > ref + S.whiteTh && s < W_SAT_MAX) ? 'W'
+                 : '.';
     }
   }
   // Pass 2: refine with a local reference computed from nearby cells
@@ -980,7 +988,10 @@ function detectFrame(){
       }
       const lref = tmp.length >= 4 ? median(tmp) : ref;
       const v = Vs[i*N + j];
-      cls[i][j] = (v < lref - S.blackTh) ? 'B' : (v > lref + S.whiteTh) ? 'W' : '.';
+      const s = Ss[i*N + j];
+      cls[i][j] = (v < lref - S.blackTh) ? 'B'
+                : (v > lref + S.whiteTh && s < W_SAT_MAX) ? 'W'
+                : '.';
     }
   }
   // On the first frame after the settle gate releases, snap the history to
