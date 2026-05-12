@@ -209,11 +209,13 @@ a{color:#7cb7ff}
       <summary>設定 ・ しきい値調整</summary>
       <div class="sBody">
         <div class="sRow">
-          <div class="sHead">黒の検出強度 <span class="v" id="blackVal">55</span></div>
+          <div class="sHead">黒の判定の厳しさ <span class="v" id="blackVal">55</span></div>
+          <div style="font-size:.7rem;color:#aaa;margin-bottom:4px">大きい=より暗い時だけ黒と判定（誤検出が減る）／小さい=黒と認めやすい</div>
           <input type="range" id="blackTh" min="10" max="120" value="55">
         </div>
         <div class="sRow">
-          <div class="sHead">白の検出強度 <span class="v" id="whiteVal">30</span></div>
+          <div class="sHead">白の判定の厳しさ <span class="v" id="whiteVal">30</span></div>
+          <div style="font-size:.7rem;color:#aaa;margin-bottom:4px">大きい=より明るい時だけ白と判定（光の反射に強い）／小さい=白と認めやすい</div>
           <input type="range" id="whiteTh" min="5" max="120" value="30">
         </div>
         <div class="sRow">
