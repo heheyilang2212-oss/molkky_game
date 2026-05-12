@@ -1,0 +1,26 @@
+{
+  "name": "碁盤カメラ中継",
+  "short_name": "碁盤中継",
+  "start_url": "go-board.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#0e0e10",
+  "theme_color": "#1a1a1a",
+  "lang": "ja",
+  "description": "スマホカメラで撮った碁盤を石ごと認識して、観戦者にリアルタイム中継するアプリ",
+  "icons": [
+    {
+      "src": "go-board-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "go-board-icon-maskable.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ]
+}

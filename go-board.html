@@ -4,6 +4,11 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0,user-scalable=no">
 <meta name="theme-color" content="#1a1a1a">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="碁盤中継">
+<link rel="manifest" href="go-board-manifest.webmanifest">
+<link rel="apple-touch-icon" href="data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20180%20180%22%3E%3Crect%20width%3D%22180%22%20height%3D%22180%22%20rx%3D%2228%22%20fill%3D%22%23d4a55a%22%2F%3E%3Cg%20stroke%3D%22%231a1208%22%20stroke-width%3D%222%22%20fill%3D%22none%22%3E%3Cpath%20d%3D%22M30%2030h120M30%2060h120M30%2090h120M30%20120h120M30%20150h120M30%2030v120M60%2030v120M90%2030v120M120%2030v120M150%2030v120%22%2F%3E%3C%2Fg%3E%3Ccircle%20cx%3D%2260%22%20cy%3D%2260%22%20r%3D%2212%22%20fill%3D%22%23111%22%2F%3E%3Ccircle%20cx%3D%22120%22%20cy%3D%22120%22%20r%3D%2212%22%20fill%3D%22%23fff%22%20stroke%3D%22%23999%22%2F%3E%3C%2Fsvg%3E">
 <title>碁盤カメラ中継</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
@@ -276,6 +281,9 @@ a{color:#7cb7ff}
       <label style="display:flex;align-items:center;gap:6px">●黒<input id="blackName" type="text" maxlength="40" placeholder="黒番の名前" style="width:140px;padding:4px 8px;border-radius:6px;border:1px solid rgba(255,255,255,.18);background:rgba(0,0,0,.25);color:#fff"></label>
       <label style="display:flex;align-items:center;gap:6px">○白<input id="whiteName" type="text" maxlength="40" placeholder="白番の名前" style="width:140px;padding:4px 8px;border-radius:6px;border:1px solid rgba(255,255,255,.18);background:rgba(0,0,0,.25);color:#fff"></label>
       <label style="display:flex;align-items:center;gap:6px">対局名<input id="gameName" type="text" maxlength="80" placeholder="(任意)" style="width:160px;padding:4px 8px;border-radius:6px;border:1px solid rgba(255,255,255,.18);background:rgba(0,0,0,.25);color:#fff"></label>
+      <label style="display:flex;align-items:center;gap:6px">コミ<input id="komi" type="number" step="0.5" min="-100" max="100" style="width:60px;padding:4px 6px;border-radius:6px;border:1px solid rgba(255,255,255,.18);background:rgba(0,0,0,.25);color:#fff"></label>
+      <label style="display:flex;align-items:center;gap:6px">置石<input id="handicap" type="number" min="0" max="9" style="width:50px;padding:4px 6px;border-radius:6px;border:1px solid rgba(255,255,255,.18);background:rgba(0,0,0,.25);color:#fff"></label>
+      <label style="display:flex;align-items:center;gap:6px">結果<input id="result" type="text" maxlength="20" placeholder="例: B+5.5 / W+R" style="width:120px;padding:4px 8px;border-radius:6px;border:1px solid rgba(255,255,255,.18);background:rgba(0,0,0,.25);color:#fff"></label>
     </div>
     <div class="actions">
       <button class="primary full" id="btnStart">▶ 開始（カウント開始）</button>
@@ -290,8 +298,18 @@ a{color:#7cb7ff}
       <button id="btnRecalib">再キャリブレ</button>
       <button id="btnPng">盤面をPNG保存</button>
       <button id="btnUndo">最終手を取消</button>
+      <button id="btnPass">パス</button>
+      <button id="btnResign">投了</button>
       <button class="primary full" id="btnSGF">SGFをダウンロード</button>
     </div>
+    <details class="settings" style="margin-top:8px">
+      <summary>💬 チャット <span id="bChatCount" style="color:#888;font-size:.72rem">(0)</span></summary>
+      <div id="bChatBox" style="background:rgba(0,0,0,.25);border-radius:8px;padding:8px;max-height:200px;overflow-y:auto;font-size:.82rem;line-height:1.5"></div>
+      <div style="display:flex;gap:6px;margin-top:6px">
+        <input id="bChatInput" type="text" maxlength="200" placeholder="観戦者にメッセージ..." style="flex:1;padding:6px 10px;border-radius:6px;border:1px solid rgba(255,255,255,.18);background:rgba(0,0,0,.25);color:#fff">
+        <button id="bChatSend" style="padding:6px 14px;border-radius:6px;background:rgba(244,208,63,.2);color:#f4d03f;border:1px solid rgba(244,208,63,.4)">送信</button>
+      </div>
+    </details>
   </div>
 </section>
 
@@ -336,6 +354,14 @@ a{color:#7cb7ff}
       <button id="vNumBtn" style="padding:6px 14px;border-radius:18px;border:1px solid rgba(255,255,255,.2);background:rgba(255,255,255,.06);color:#fff;font-size:.78rem">手番表示 オフ</button>
       <button id="vSgfBtn" style="padding:6px 14px;border-radius:18px;border:1px solid rgba(244,208,63,.5);background:rgba(244,208,63,.15);color:#f4d03f;font-size:.78rem">SGFダウンロード</button>
     </div>
+    <details style="margin:10px auto 0;max-width:520px;width:90%">
+      <summary style="cursor:pointer;color:#ddd">💬 チャット <span id="vChatCount" style="color:#888;font-size:.72rem">(0)</span></summary>
+      <div id="vChatBox" style="background:rgba(0,0,0,.25);border-radius:8px;padding:8px;max-height:200px;overflow-y:auto;font-size:.82rem;line-height:1.5;margin-top:6px"></div>
+      <div style="display:flex;gap:6px;margin-top:6px">
+        <input id="vChatInput" type="text" maxlength="200" placeholder="メッセージ..." style="flex:1;padding:6px 10px;border-radius:6px;border:1px solid rgba(255,255,255,.18);background:rgba(0,0,0,.25);color:#fff">
+        <button id="vChatSend" style="padding:6px 14px;border-radius:6px;background:rgba(244,208,63,.2);color:#f4d03f;border:1px solid rgba(244,208,63,.4)">送信</button>
+      </div>
+    </details>
   </div>
 </section>
 
@@ -399,6 +425,10 @@ const S = {
   blackName: '',
   whiteName: '',
   gameName: '',
+  // Match-level meta written into SGF (KM, HA, RE).
+  komi: 6.5,
+  handicap: 0,
+  result: '',
   // Viewer-side display name. Saved in localStorage; sent to the broadcaster
   // via a 'hello' DataConnection message so the broadcaster can list who is
   // watching.
@@ -406,6 +436,8 @@ const S = {
   // Broadcaster-side: per-connection metadata (display name etc.) keyed by
   // PeerJS DataConnection object. Not persisted.
   connInfo: null,
+  // Chat messages — kept in-memory, capped at 100, format {name, text, ts, mine}
+  chat: [],
   // Empty-board reference: per-cell V/S captured when the board is empty.
   // When set, classification uses this as the baseline instead of the running
   // row/column median, which dramatically reduces false positives caused by
@@ -485,6 +517,149 @@ function toast(msg, isErr){
 function clamp(v,a,b){return v<a?a:v>b?b:v}
 function escapeHtml(s){
   return String(s).replace(/[&<>"']/g, c=>({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
+}
+// ============================================================
+// CHAT
+// ============================================================
+function appendChat(msg){
+  if(!S.chat) S.chat = [];
+  S.chat.push(msg);
+  while(S.chat.length > 100) S.chat.shift();
+  renderChat();
+}
+function renderChat(){
+  const lists = ['bChatBox', 'vChatBox'];
+  for(const id of lists){
+    const el = document.getElementById(id);
+    if(!el) continue;
+    el.innerHTML = (S.chat || []).map(m => {
+      const t = new Date(m.ts || Date.now()).toLocaleTimeString().slice(0,5);
+      const nm = escapeHtml(m.name || '(匿名)');
+      const tx = escapeHtml(m.text || '');
+      const color = m.mine ? '#7cffa7' : '#f4d03f';
+      return `<div><span style="color:${color}">${nm}</span> <span style="color:#666">${t}</span><br><span style="color:#eee">${tx}</span></div>`;
+    }).join('');
+    el.scrollTop = el.scrollHeight;
+  }
+  const cnt = (S.chat || []).length;
+  if($('bChatCount')) $('bChatCount').textContent = '(' + cnt + ')';
+  if($('vChatCount')) $('vChatCount').textContent = '(' + cnt + ')';
+}
+function broadcasterSendChat(text){
+  const msg = { type: 'chat', name: (S.gameName || 'ホスト') || 'ホスト', text: text, ts: Date.now() };
+  appendChat({ name: msg.name, text: msg.text, ts: msg.ts, mine: true });
+  for(const c of (S.conns || [])){
+    try{ c.send(msg); }catch(e){}
+  }
+}
+function broadcasterRelayChat(from, msg){
+  // Echo to other viewers + append locally
+  const out = { type: 'chat', name: msg.name || '(匿名)', text: msg.text, ts: msg.ts || Date.now() };
+  appendChat({ name: out.name, text: out.text, ts: out.ts, mine: false });
+  for(const c of (S.conns || [])){
+    if(c === from) continue;
+    try{ c.send(out); }catch(e){}
+  }
+}
+function viewerSendChat(text){
+  if(!S.conn || !S.conn.open) { toast('未接続です', true); return; }
+  const msg = { type: 'chat', name: (S.viewerName || '').trim() || '(匿名)', text: text, ts: Date.now() };
+  appendChat({ name: msg.name, text: msg.text, ts: msg.ts, mine: true });
+  try{ S.conn.send(msg); }catch(e){}
+}
+// ============================================================
+// GAME AUTO-SAVE / RESTORE
+// ============================================================
+const SAVED_GAME_KEY = 'goboard.savedGame.v1';
+const ARCHIVED_GAMES_KEY = 'goboard.archivedGames.v1';
+function saveGameSnapshot(){
+  if(!S.gameStarted) return;
+  if(!S.movesInitialized) return;
+  try{
+    const snap = {
+      v: 1,
+      size: S.size,
+      initialPosition: S.initialPosition,
+      committed: S.committed,
+      moves: S.moves,
+      blackName: S.blackName, whiteName: S.whiteName, gameName: S.gameName,
+      komi: S.komi, handicap: S.handicap, result: S.result,
+      turn: S.turn,
+      startedTs: S._gameStartedTs || Date.now(),
+      ts: Date.now(),
+    };
+    localStorage.setItem(SAVED_GAME_KEY, JSON.stringify(snap));
+  }catch(e){ console.warn('saveGameSnapshot failed', e); }
+}
+function loadGameSnapshot(){
+  try{
+    const raw = localStorage.getItem(SAVED_GAME_KEY);
+    if(!raw) return null;
+    const j = JSON.parse(raw);
+    if(!j || j.v !== 1) return null;
+    return j;
+  }catch(e){ return null; }
+}
+function clearGameSnapshot(){
+  try{ localStorage.removeItem(SAVED_GAME_KEY); }catch(e){}
+}
+function archiveCurrentGame(){
+  if(!S.gameStarted || !S.moves || !S.moves.length) return;
+  try{
+    const meta = {
+      blackName: S.blackName, whiteName: S.whiteName, gameName: S.gameName,
+      komi: S.komi, handicap: S.handicap, result: S.result,
+    };
+    const sgf = buildSGFFrom(S.size, S.initialPosition, S.committed, S.moves, S.turn, meta);
+    const list = JSON.parse(localStorage.getItem(ARCHIVED_GAMES_KEY) || '[]');
+    list.unshift({
+      ts: Date.now(),
+      moves: S.moves.length,
+      result: S.result,
+      blackName: S.blackName, whiteName: S.whiteName, gameName: S.gameName,
+      sgf,
+    });
+    // Cap at 20 archived games
+    while(list.length > 20) list.pop();
+    localStorage.setItem(ARCHIVED_GAMES_KEY, JSON.stringify(list));
+  }catch(e){ console.warn('archive failed', e); }
+}
+function restoreFromSnapshot(snap){
+  if(!snap || snap.v !== 1) return false;
+  S.size = snap.size;
+  setActiveSize(S.size);
+  initDetectionState();
+  S.initialPosition = snap.initialPosition;
+  // Snapshot the committed state from the saved game so future detections
+  // diff against it (rather than the freshly-detected empty board).
+  for(let i=0;i<S.size;i++) for(let j=0;j<S.size;j++){
+    S.committed[i][j] = (snap.committed && snap.committed[i] && snap.committed[i][j]) || '.';
+    S.prevCommitted[i][j] = S.committed[i][j];
+    S.history[i][j] = Array.from({length: S.histDepth}, ()=>S.committed[i][j]);
+  }
+  S.moves = (snap.moves || []).slice();
+  S.movesInitialized = true;
+  S.gameStarted = true;
+  S.blackName = snap.blackName || '';
+  S.whiteName = snap.whiteName || '';
+  S.gameName = snap.gameName || '';
+  S.komi = (typeof snap.komi === 'number') ? snap.komi : 6.5;
+  S.handicap = snap.handicap || 0;
+  S.result = snap.result || '';
+  S.turn = snap.turn || 'B';
+  S._gameStartedTs = snap.startedTs || Date.now();
+  $('blackName').value = S.blackName;
+  $('whiteName').value = S.whiteName;
+  $('gameName').value = S.gameName;
+  $('komi').value = S.komi;
+  $('handicap').value = S.handicap;
+  $('result').value = S.result;
+  $('moveCount').textContent = S.moves.length;
+  updateGameStateUI();
+  drawBoardCanvas('boardB');
+  drawOverlay();
+  broadcastState();
+  return true;
 }
 function updateRefBoardUI(){
   const cap = document.getElementById('btnCaptureRef');
@@ -602,6 +777,8 @@ function loadSettings(){
     if(typeof j.whiteName === 'string') S.whiteName = j.whiteName;
     if(typeof j.gameName === 'string') S.gameName = j.gameName;
     if(typeof j.viewerName === 'string') S.viewerName = j.viewerName;
+    if(typeof j.komi === 'number') S.komi = j.komi;
+    if(typeof j.handicap === 'number') S.handicap = j.handicap;
     if(j.selectedCamId) S.selectedCamId = j.selectedCamId;
   }catch(e){}
 }
@@ -625,6 +802,8 @@ function saveSettings(){
       whiteName: S.whiteName,
       gameName: S.gameName,
       viewerName: S.viewerName,
+      komi: S.komi,
+      handicap: S.handicap,
       selectedCamId: S.selectedCamId,
     }));
   }catch(e){}
@@ -1556,6 +1735,7 @@ function trackMoves(){
   $('moveCount').textContent = S.moves.length;
   S.lastMoveTime = ts;
   playStoneClick();
+  saveGameSnapshot();
 }
 
 // ============================================================
@@ -1746,6 +1926,9 @@ function buildSGFFrom(N, initialBoard, currentBoard, moves, turn, meta){
     if(meta.gameName) body += `GN[${sgfText(meta.gameName)}]`;
     if(meta.blackName) body += `PB[${sgfText(meta.blackName)}]`;
     if(meta.whiteName) body += `PW[${sgfText(meta.whiteName)}]`;
+    if(typeof meta.komi === 'number' && !isNaN(meta.komi)) body += `KM[${meta.komi}]`;
+    if(typeof meta.handicap === 'number' && meta.handicap > 0) body += `HA[${meta.handicap|0}]`;
+    if(meta.result) body += `RE[${sgfText(meta.result)}]`;
   }
   const initial = initialBoard || currentBoard;
   if(initial){
@@ -1759,7 +1942,10 @@ function buildSGFFrom(N, initialBoard, currentBoard, moves, turn, meta){
   }
   if(moves && moves.length){
     body += '\n';
-    for(const m of moves) body += `;${m.c}[${sgfCoord(m.x, m.y)}]`;
+    for(const m of moves){
+      const isPass = (m.x == null || m.y == null);
+      body += `;${m.c}[${isPass ? '' : sgfCoord(m.x, m.y)}]`;
+    }
   } else if(turn){
     body += `\nPL[${turn}]`;
   }
@@ -1780,7 +1966,10 @@ function generateSGF(){
   const N = S.size;
   const initial = (S.trackMoves && S.movesInitialized && S.initialPosition) ? S.initialPosition : null;
   const moves = S.trackMoves ? S.moves : null;
-  const meta = { blackName: S.blackName, whiteName: S.whiteName, gameName: S.gameName };
+  const meta = {
+    blackName: S.blackName, whiteName: S.whiteName, gameName: S.gameName,
+    komi: S.komi, handicap: S.handicap, result: S.result,
+  };
   const text = buildSGFFrom(N, initial, S.committed, moves, S.turn, meta);
   downloadSGF(text, 'goboard');
   toast('SGF をダウンロードしました');
@@ -1836,21 +2025,29 @@ function startPeerHost(forceNewId){
       sendStateTo(conn);
     });
     conn.on('data', (data)=>{
-      if(!data || data.type !== 'hello') return;
-      if(!S.connInfo) S.connInfo = new Map();
-      const meta = S.connInfo.get(conn) || { name: '', announced: false };
-      const raw = (typeof data.name === 'string') ? data.name.trim().slice(0, 32) : '';
-      const newName = raw || '(匿名)';
-      const isFirstHello = !meta.announced;
-      const isNameChange = meta.announced && meta.name !== newName;
-      meta.name = newName;
-      meta.announced = true;
-      S.connInfo.set(conn, meta);
-      updateViewerListUI();
-      if(isFirstHello){
-        toast('👁 ' + newName + ' さんが入室しました');
-      } else if(isNameChange){
-        toast('👁 ' + newName + ' に名前変更');
+      if(!data || !data.type) return;
+      if(data.type === 'hello'){
+        if(!S.connInfo) S.connInfo = new Map();
+        const meta = S.connInfo.get(conn) || { name: '', announced: false };
+        const raw = (typeof data.name === 'string') ? data.name.trim().slice(0, 32) : '';
+        const newName = raw || '(匿名)';
+        const isFirstHello = !meta.announced;
+        const isNameChange = meta.announced && meta.name !== newName;
+        meta.name = newName;
+        meta.announced = true;
+        S.connInfo.set(conn, meta);
+        updateViewerListUI();
+        if(isFirstHello){
+          toast('👁 ' + newName + ' さんが入室しました');
+        } else if(isNameChange){
+          toast('👁 ' + newName + ' に名前変更');
+        }
+      } else if(data.type === 'chat'){
+        const text = (typeof data.text === 'string') ? data.text.slice(0, 300) : '';
+        if(!text) return;
+        const meta = S.connInfo && S.connInfo.get(conn);
+        const name = (data.name && data.name.trim()) || (meta && meta.name) || '(匿名)';
+        broadcasterRelayChat(conn, { name, text, ts: data.ts || Date.now() });
       }
     });
     const handleGone = ()=>{
@@ -1895,6 +2092,9 @@ function snapshotState(){
     blackName: S.blackName || '',
     whiteName: S.whiteName || '',
     gameName: S.gameName || '',
+    komi: typeof S.komi === 'number' ? S.komi : null,
+    handicap: typeof S.handicap === 'number' ? S.handicap : 0,
+    result: S.result || '',
     ts: Date.now(),
   };
 }
@@ -2103,7 +2303,8 @@ function connectToHost(shortId){
     sendViewerHello();
   });
   conn.on('data', (data)=>{
-    if(data && data.type === 'state'){
+    if(!data || !data.type) return;
+    if(data.type === 'state'){
       S.vLatestState = data;
       const mvCount = (data.moves||[]).length;
       if(mvCount > S.vPrevMoveCount && S.vPrevMoveCount > 0 && S.vAtLive){
@@ -2114,6 +2315,10 @@ function connectToHost(shortId){
       const lat = data.ts ? Math.max(0, Date.now() - data.ts) : null;
       const latStr = lat !== null ? '  遅延 ' + lat + 'ms' : '';
       setVStatus('受信中  ' + new Date().toLocaleTimeString() + latStr, 'connected');
+    } else if(data.type === 'chat'){
+      const text = (typeof data.text === 'string') ? data.text.slice(0, 300) : '';
+      if(!text) return;
+      appendChat({ name: data.name || '(匿名)', text, ts: data.ts || Date.now(), mine: false });
     }
   });
   conn.on('close', ()=>{
@@ -2179,6 +2384,8 @@ async function enterBroadcast(){
   S.suspiciousFrames = 0;
   S.gameStarted = false;
   S.connInfo = new Map();
+  S.chat = [];
+  renderChat();
   $('moveCount').textContent = 0;
   updateGameStateUI();
   updateRefBoardUI();
@@ -2200,6 +2407,9 @@ async function enterBroadcast(){
   $('blackName').value = S.blackName || '';
   $('whiteName').value = S.whiteName || '';
   $('gameName').value = S.gameName || '';
+  $('komi').value = (typeof S.komi === 'number') ? S.komi : 6.5;
+  $('handicap').value = S.handicap || 0;
+  $('result').value = S.result || '';
   setActiveSize(S.size);
   drawBoardCanvas('boardB');
   await listCameras();
@@ -2213,6 +2423,38 @@ async function enterBroadcast(){
       setTimeout(()=>toast('① 黄色いハンドルを碁盤の四隅(交点)に合わせる ② 設定でしきい値を調整'), 600);
       setTimeout(()=>toast('③ 部屋IDかURLを共有 ④ 観戦側はURLを開くだけ'), 4200);
       localStorage.setItem('goboard.tutDone', '1');
+    }
+    // Offer to resume the previous game (if recent and has moves)
+    const saved = loadGameSnapshot();
+    if(saved && saved.moves && saved.moves.length){
+      const age = Date.now() - (saved.ts || 0);
+      const ageH = Math.round(age / 3600000);
+      const ageMin = Math.round(age / 60000);
+      const ageStr = ageH > 0 ? (ageH + '時間前') : (ageMin + '分前');
+      const desc = `前回の対局を続けますか？\n\n` +
+        `路盤: ${saved.size}路 / 手数: ${saved.moves.length} / ${ageStr}\n` +
+        `${saved.blackName||'(黒)'} vs ${saved.whiteName||'(白)'}` +
+        (saved.gameName ? `\n対局名: ${saved.gameName}` : '');
+      setTimeout(()=>{
+        if(confirm(desc)) {
+          if(restoreFromSnapshot(saved)) toast('前回の対局を復元しました');
+        } else {
+          if(confirm('前回の対局を破棄しますか？')){
+            // Archive before discarding so user can still recover the SGF
+            try{
+              const list = JSON.parse(localStorage.getItem(ARCHIVED_GAMES_KEY) || '[]');
+              const sgf = buildSGFFrom(saved.size, saved.initialPosition, saved.committed, saved.moves, saved.turn, {
+                blackName: saved.blackName, whiteName: saved.whiteName, gameName: saved.gameName,
+                komi: saved.komi, handicap: saved.handicap, result: saved.result,
+              });
+              list.unshift({ ts: saved.ts, moves: saved.moves.length, result: saved.result, blackName: saved.blackName, whiteName: saved.whiteName, gameName: saved.gameName, sgf });
+              while(list.length > 20) list.pop();
+              localStorage.setItem(ARCHIVED_GAMES_KEY, JSON.stringify(list));
+            }catch(e){}
+            clearGameSnapshot();
+          }
+        }
+      }, 800);
     }
   } catch(e){
     console.error(e);
@@ -2251,6 +2493,8 @@ function exitBroadcast(){
 function enterView(shortId){
   showScreen('viewScreen');
   if($('vNameEdit')) $('vNameEdit').value = S.viewerName || '';
+  S.chat = [];
+  renderChat();
   S.vViewIndex = 0;
   S.vAtLive = true;
   S.vIsPlaying = false;
@@ -2410,6 +2654,23 @@ function init(){
   $('blackName').addEventListener('input', onPlayerNameChange);
   $('whiteName').addEventListener('input', onPlayerNameChange);
   $('gameName').addEventListener('input', onPlayerNameChange);
+  $('komi').addEventListener('input', e=>{
+    const v = parseFloat(e.target.value);
+    S.komi = isNaN(v) ? 0 : v;
+    saveSettings();
+    broadcastState();
+  });
+  $('handicap').addEventListener('input', e=>{
+    const v = parseInt(e.target.value, 10);
+    S.handicap = isNaN(v) ? 0 : Math.max(0, Math.min(9, v));
+    saveSettings();
+    broadcastState();
+  });
+  $('result').addEventListener('input', e=>{
+    S.result = (e.target.value || '').trim().slice(0, 32);
+    broadcastState();
+    saveGameSnapshot();
+  });
   $('btnReset').addEventListener('click', ()=>{
     S.corners = defaultCorners();
     initDetectionState();
@@ -2454,25 +2715,35 @@ function init(){
     S.moves = [];
     S.suspiciousFrames = 0;
     S.gameStarted = true;
+    S.result = '';
+    $('result').value = '';
+    S._gameStartedTs = Date.now();
     $('moveCount').textContent = 0;
     updateGameStateUI();
     drawBoardCanvas('boardB');
     broadcastState();
+    saveGameSnapshot();
     toast('ゲーム開始 - ここからカウントします');
   });
   $('btnRestart').addEventListener('click', ()=>{
     if(!S.committed){ toast('まだ盤面が認識されていません', true); return; }
     if(!confirm('現在の手数をリセットして、いまの盤面を1手目の前として始め直しますか？')) return;
+    // Archive the previous game before resetting
+    archiveCurrentGame();
     S.initialPosition = snapshotCommitted();
     syncPrevToCommitted();
     S.movesInitialized = true;
     S.moves = [];
     S.suspiciousFrames = 0;
     S.gameStarted = true;
+    S.result = '';
+    $('result').value = '';
+    S._gameStartedTs = Date.now();
     $('moveCount').textContent = 0;
     updateGameStateUI();
     drawBoardCanvas('boardB');
     broadcastState();
+    saveGameSnapshot();
     toast('初期状態に戻しました（1手目から）');
   });
   $('btnRecalib').addEventListener('click', ()=>{
@@ -2584,7 +2855,7 @@ function init(){
   $('btnUndo').addEventListener('click', ()=>{
     if(!S.moves.length){ toast('取消す手がありません', true); return; }
     const m = S.moves.pop();
-    if(S.committed[m.x] && S.committed[m.x][m.y] === m.c){
+    if(m.x != null && m.y != null && S.committed[m.x] && S.committed[m.x][m.y] === m.c){
       S.committed[m.x][m.y] = '.';
       S.history[m.x][m.y] = Array.from({length:S.histDepth}, ()=>'.');
       S.prevCommitted[m.x][m.y] = '.';
@@ -2593,7 +2864,42 @@ function init(){
     drawBoardCanvas('boardB');
     drawOverlay();
     broadcastState();
+    saveGameSnapshot();
     toast('最終手を取消');
+  });
+  $('btnPass').addEventListener('click', ()=>{
+    if(!S.gameStarted){ toast('まず「開始」を押してください', true); return; }
+    const c = S.turn || 'B';
+    S.moves.push({ c, x: null, y: null, t: Date.now() });
+    $('moveCount').textContent = S.moves.length;
+    // Manually flip turn since stone count didn't change
+    S.turn = (c === 'B') ? 'W' : 'B';
+    $('turnInd').innerHTML = '手番: <b>' + (S.turn==='B' ? '黒●' : '白○') + '</b>';
+    S.lastMoveTime = Date.now();
+    drawBoardCanvas('boardB');
+    broadcastState();
+    saveGameSnapshot();
+    playStoneClick();
+    toast(c==='B' ? '黒がパス' : '白がパス');
+  });
+  $('btnResign').addEventListener('click', ()=>{
+    if(!S.gameStarted){ toast('まず「開始」を押してください', true); return; }
+    const loser = S.turn || 'B';  // whoever is to move resigns
+    const winner = loser === 'B' ? 'W' : 'B';
+    const which = prompt(
+      '投了するのはどちら？ B = 黒、W = 白 を入力してください。\n' +
+      '（既定は手番側 ' + (loser==='B'?'黒':'白') + ' が投了 → ' + (winner==='B'?'B+R':'W+R') + '）',
+      loser
+    );
+    if(which == null) return;
+    const v = which.trim().toUpperCase();
+    if(v !== 'B' && v !== 'W'){ toast('B か W を入力してください', true); return; }
+    const won = v === 'B' ? 'W' : 'B';
+    S.result = won + '+R';
+    $('result').value = S.result;
+    broadcastState();
+    saveGameSnapshot();
+    toast((won==='B'?'黒':'白') + 'の勝ち（' + S.result + '）');
   });
   $('copyId').addEventListener('click', async ()=>{
     const v = $('roomId').textContent;
@@ -2627,6 +2933,25 @@ function init(){
     clearTimeout(_vNameTimer);
     _vNameTimer = setTimeout(sendViewerHello, 600);
   });
+  // Chat: broadcaster
+  function sendBChat(){
+    const v = $('bChatInput').value.trim();
+    if(!v) return;
+    if(!S.conns || !S.conns.length){ toast('まだ観戦者がいません', true); }
+    broadcasterSendChat(v.slice(0, 300));
+    $('bChatInput').value = '';
+  }
+  $('bChatSend').addEventListener('click', sendBChat);
+  $('bChatInput').addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); sendBChat(); } });
+  // Chat: viewer
+  function sendVChat(){
+    const v = $('vChatInput').value.trim();
+    if(!v) return;
+    viewerSendChat(v.slice(0, 300));
+    $('vChatInput').value = '';
+  }
+  $('vChatSend').addEventListener('click', sendVChat);
+  $('vChatInput').addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); sendVChat(); } });
   // Broadcaster: toggle viewer list
   $('btnViewerList').addEventListener('click', ()=>{
     const list = $('viewerList');
@@ -2703,7 +3028,8 @@ function init(){
     if(!S.vLatestState){ toast('盤面データがまだ届いていません', true); return; }
     const d = S.vLatestState;
     const text = buildSGFFrom(d.size, d.initialPosition || null, d.committed, d.moves, d.turn, {
-      blackName: d.blackName, whiteName: d.whiteName, gameName: d.gameName
+      blackName: d.blackName, whiteName: d.whiteName, gameName: d.gameName,
+      komi: d.komi, handicap: d.handicap, result: d.result,
     });
     downloadSGF(text, 'goboard_view');
     toast('SGFをダウンロード');
@@ -2729,6 +3055,12 @@ function init(){
   }
 }
 document.addEventListener('DOMContentLoaded', init);
+// PWA: register the service worker so the app installs and works offline.
+if('serviceWorker' in navigator && location.protocol !== 'file:'){
+  window.addEventListener('load', ()=>{
+    navigator.serviceWorker.register('go-board-sw.js').catch(err => console.warn('SW register failed', err));
+  });
+}
 </script>
 </body>
 </html>
