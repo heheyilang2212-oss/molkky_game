@@ -267,6 +267,8 @@ a{color:#7cb7ff}
     <div class="actions">
       <button class="primary full" id="btnStart">▶ 開始（カウント開始）</button>
       <button id="btnRestart">⟲ 初期状態に戻す（1手目から）</button>
+      <button id="btnCaptureRef" title="盤に石が無い状態でこのボタンを押すと、木目や照明ムラを覚えて誤検出を減らせます">📷 空の盤面を基準として記録</button>
+      <button id="btnClearRef" style="display:none">基準をクリア</button>
       <button id="btnReset">隅をリセット</button>
       <button id="btnRotate">盤を90°回転</button>
       <button id="btnRecalib">再キャリブレ</button>
@@ -370,6 +372,14 @@ const S = {
   blackName: '',
   whiteName: '',
   gameName: '',
+  // Empty-board reference: per-cell V/S captured when the board is empty.
+  // When set, classification uses this as the baseline instead of the running
+  // row/column median, which dramatically reduces false positives caused by
+  // wood-grain knots, uneven lighting, etc. Stored in-memory only (depends on
+  // camera position and lighting).
+  refBoard: null,        // { size:N, V:Float32Array(N*N), S:Float32Array(N*N), ts }
+  _lastVs: null,
+  _lastSs: null,
   turn: 'B',
   lastMoveTime: 0,
   vPrevMoveCount: 0,       // viewer side: previous move count for diff
@@ -434,6 +444,24 @@ function toast(msg, isErr){
 function clamp(v,a,b){return v<a?a:v>b?b:v}
 function escapeHtml(s){
   return String(s).replace(/[&<>"']/g, c=>({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
+}
+function updateRefBoardUI(){
+  const cap = document.getElementById('btnCaptureRef');
+  const clr = document.getElementById('btnClearRef');
+  if(!cap || !clr) return;
+  if(S.refBoard && S.refBoard.size === S.size){
+    cap.textContent = '📷 空の盤面を再記録（基準あり）';
+    cap.style.background = 'rgba(124,255,167,.18)';
+    cap.style.color = '#7cffa7';
+    cap.style.borderColor = 'rgba(124,255,167,.4)';
+    clr.style.display = '';
+  } else {
+    cap.textContent = '📷 空の盤面を基準として記録';
+    cap.style.background = '';
+    cap.style.color = '';
+    cap.style.borderColor = '';
+    clr.style.display = 'none';
+  }
 }
 function updateGameStateUI(){
   const ind = document.getElementById('gameStateInd');
@@ -941,7 +969,13 @@ function pushHistory(i, j, val){
 }
 function commitFromHistory(){
   const N = S.size, K = S.histDepth;
+  // Normal vote threshold (70%). Used when adding a stone or keeping the same
+  // class. Reverting an already-committed stone back to empty (or flipping
+  // between black and white) requires a stronger majority (90%): this makes
+  // brief noise — a momentary flicker from a glare or partial occlusion —
+  // unable to wipe out a stone that has been stable for a while.
   const minVotes = Math.max(2, Math.ceil(K * 0.7));
+  const strongVotes = Math.max(2, Math.ceil(K * 0.9));
   for(let i=0;i<N;i++){
     for(let j=0;j<N;j++){
       const buf = S.history[i][j];
@@ -952,9 +986,11 @@ function commitFromHistory(){
         if(v==='B') cB++; else if(v==='W') cW++; else cE++;
       }
       const top = Math.max(cB, cW, cE);
-      if(top >= Math.min(minVotes, buf.length)){
-        const newVal = (top===cB)?'B':(top===cW)?'W':'.';
-        S.committed[i][j] = newVal;
+      const candidate = (top===cB)?'B':(top===cW)?'W':'.';
+      const cur = S.committed[i][j];
+      const needed = (cur === '.' || cur === candidate) ? minVotes : strongVotes;
+      if(top >= Math.min(needed, buf.length)){
+        S.committed[i][j] = candidate;
       }
     }
   }
@@ -1101,6 +1137,8 @@ function detectFrame(){
       Ss[i*N + j] = sn > 0 ? ssum / sn : 0;
     }
   }
+  // Stash the latest per-cell samples so the "空の盤面を記録" button can use them.
+  S._lastVs = Vs; S._lastSs = Ss;
   // Estimate board reference brightness as median of all intersections.
   // Most points are empty (= wood) for typical positions, so median ≈ wood V.
   const Vall = Array.from(Vs);
@@ -1110,44 +1148,64 @@ function detectFrame(){
   // "white" candidates here. The board wood itself is moderately saturated
   // (~0.3-0.5 brown), so this also helps avoid calling bright wood "W".
   const W_SAT_MAX = 0.30;
-  // Pass 1: classify with the global reference
-  const cls1 = new Array(N);
-  for(let i=0;i<N;i++){
-    cls1[i] = new Array(N);
-    for(let j=0;j<N;j++){
-      const v = Vs[i*N + j];
-      const s = Ss[i*N + j];
-      cls1[i][j] = (v < ref - S.blackTh) ? 'B'
-                 : (v > ref + S.whiteTh && s < W_SAT_MAX) ? 'W'
-                 : '.';
-    }
-  }
-  // Pass 2: refine with a local reference computed from nearby cells
-  // classified as empty in pass 1. Helps boards with non-uniform lighting
-  // (window light on one side, etc.). Falls back to the global ref when no
-  // empty neighbours exist (highly populated region).
+  // If we have a recorded empty-board reference for the current board size,
+  // use it directly as the per-cell baseline. This handles wood-grain knots,
+  // persistent shadows, and bowl/lid placement under the camera much better
+  // than the running median.
+  const haveRef = !!(S.refBoard && S.refBoard.size === N && S.refBoard.V && S.refBoard.V.length === N*N);
   const cls = new Array(N);
-  const radius = 2;
-  const tmp = [];
-  for(let i=0;i<N;i++){
-    cls[i] = new Array(N);
-    for(let j=0;j<N;j++){
-      tmp.length = 0;
-      for(let di=-radius; di<=radius; di++){
-        const ni = i+di;
-        if(ni<0||ni>=N) continue;
-        for(let dj=-radius; dj<=radius; dj++){
-          const nj = j+dj;
-          if(nj<0||nj>=N) continue;
-          if(cls1[ni][nj] === '.') tmp.push(Vs[ni*N + nj]);
-        }
+  if(haveRef){
+    const refV = S.refBoard.V;
+    for(let i=0;i<N;i++){
+      cls[i] = new Array(N);
+      for(let j=0;j<N;j++){
+        const v = Vs[i*N + j];
+        const s = Ss[i*N + j];
+        const r = refV[i*N + j];
+        cls[i][j] = (v < r - S.blackTh) ? 'B'
+                  : (v > r + S.whiteTh && s < W_SAT_MAX) ? 'W'
+                  : '.';
       }
-      const lref = tmp.length >= 4 ? median(tmp) : ref;
-      const v = Vs[i*N + j];
-      const s = Ss[i*N + j];
-      cls[i][j] = (v < lref - S.blackTh) ? 'B'
-                : (v > lref + S.whiteTh && s < W_SAT_MAX) ? 'W'
-                : '.';
+    }
+  } else {
+    // Pass 1: classify with the global reference
+    const cls1 = new Array(N);
+    for(let i=0;i<N;i++){
+      cls1[i] = new Array(N);
+      for(let j=0;j<N;j++){
+        const v = Vs[i*N + j];
+        const s = Ss[i*N + j];
+        cls1[i][j] = (v < ref - S.blackTh) ? 'B'
+                   : (v > ref + S.whiteTh && s < W_SAT_MAX) ? 'W'
+                   : '.';
+      }
+    }
+    // Pass 2: refine with a local reference computed from nearby cells
+    // classified as empty in pass 1. Helps boards with non-uniform lighting
+    // (window light on one side, etc.). Falls back to the global ref when no
+    // empty neighbours exist (highly populated region).
+    const radius = 2;
+    const tmp = [];
+    for(let i=0;i<N;i++){
+      cls[i] = new Array(N);
+      for(let j=0;j<N;j++){
+        tmp.length = 0;
+        for(let di=-radius; di<=radius; di++){
+          const ni = i+di;
+          if(ni<0||ni>=N) continue;
+          for(let dj=-radius; dj<=radius; dj++){
+            const nj = j+dj;
+            if(nj<0||nj>=N) continue;
+            if(cls1[ni][nj] === '.') tmp.push(Vs[ni*N + nj]);
+          }
+        }
+        const lref = tmp.length >= 4 ? median(tmp) : ref;
+        const v = Vs[i*N + j];
+        const s = Ss[i*N + j];
+        cls[i][j] = (v < lref - S.blackTh) ? 'B'
+                  : (v > lref + S.whiteTh && s < W_SAT_MAX) ? 'W'
+                  : '.';
+      }
     }
   }
   // On the first frame after the settle gate releases, snap the history to
@@ -1892,6 +1950,7 @@ async function enterBroadcast(){
   S.gameStarted = false;
   $('moveCount').textContent = 0;
   updateGameStateUI();
+  updateRefBoardUI();
   // Sync UI to settings
   $('blackTh').value = S.blackTh; $('blackVal').textContent = S.blackTh;
   $('whiteTh').value = S.whiteTh; $('whiteVal').textContent = S.whiteTh;
@@ -1988,8 +2047,10 @@ function changeSize(n){
   S.initialPosition = null;
   S.suspiciousFrames = 0;
   S.gameStarted = false;
+  S.refBoard = null;
   $('moveCount').textContent = 0;
   updateGameStateUI();
+  updateRefBoardUI();
   setActiveSize(n);
   drawBoardCanvas('boardB');
   drawOverlay();
@@ -2100,8 +2161,10 @@ function init(){
     S.initialPosition = null;
     S.gameStarted = false;
     S.moves = [];
+    S.refBoard = null;
     $('moveCount').textContent = 0;
     updateGameStateUI();
+    updateRefBoardUI();
     saveSettings();
     drawOverlay();
     toast('隅をリセットしました - ドラッグで合わせて下さい');
@@ -2115,8 +2178,10 @@ function init(){
     S.initialPosition = null;
     S.gameStarted = false;
     S.moves = [];
+    S.refBoard = null;
     $('moveCount').textContent = 0;
     updateGameStateUI();
+    updateRefBoardUI();
     saveSettings();
     drawOverlay();
     toast('盤を90°回転しました');
@@ -2160,6 +2225,43 @@ function init(){
     $('moveCount').textContent = 0;
     updateGameStateUI();
     toast('検出履歴をクリア - 改めて「開始」を押してください');
+  });
+  $('btnCaptureRef').addEventListener('click', ()=>{
+    if(!S._lastVs || S._lastVs.length !== S.size*S.size){
+      toast('まだ盤面が認識できていません', true);
+      return;
+    }
+    if(!S.committed){ toast('まだ盤面が認識されていません', true); return; }
+    let stoneCount = 0;
+    for(const row of S.committed) for(const c of row) if(c !== '.') stoneCount++;
+    if(stoneCount > 0 && !confirm(`現在 ${stoneCount} 個の石が認識されています。盤面を空にしてから押してください。それでも記録しますか？`)) return;
+    S.refBoard = {
+      size: S.size,
+      V: new Float32Array(S._lastVs),
+      S: new Float32Array(S._lastSs),
+      ts: Date.now(),
+    };
+    initDetectionState();
+    S.gameStarted = false;
+    S.moves = [];
+    S.movesInitialized = false;
+    S.initialPosition = null;
+    $('moveCount').textContent = 0;
+    updateGameStateUI();
+    updateRefBoardUI();
+    toast('空の盤面を記録しました - これを基準に判定します');
+  });
+  $('btnClearRef').addEventListener('click', ()=>{
+    S.refBoard = null;
+    initDetectionState();
+    S.gameStarted = false;
+    S.moves = [];
+    S.movesInitialized = false;
+    S.initialPosition = null;
+    $('moveCount').textContent = 0;
+    updateGameStateUI();
+    updateRefBoardUI();
+    toast('基準をクリア - 自動の局所基準で判定します');
   });
   $('btnSGF').addEventListener('click', generateSGF);
   $('btnPng').addEventListener('click', ()=>{
