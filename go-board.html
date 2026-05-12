@@ -255,12 +255,13 @@ a{color:#7cb7ff}
       <span>白 <b id="wCount">0</b></span>
       <span>手数 <b id="moveCount">0</b></span>
       <span id="turnInd">手番: --</span>
+      <span id="gameStateInd" style="margin-left:auto;padding:2px 10px;border-radius:10px;background:rgba(244,208,63,.15);color:#f4d03f;font-weight:600">準備中</span>
     </div>
     <div class="actions">
+      <button class="primary full" id="btnStart">▶ 開始（カウント開始）</button>
+      <button id="btnRestart">⟲ 初期状態に戻す（1手目から）</button>
       <button id="btnReset">隅をリセット</button>
       <button id="btnRotate">盤を90°回転</button>
-      <button id="btnSetInitial">現在を初手前に設定</button>
-      <button id="btnClearMoves">履歴クリア</button>
       <button id="btnRecalib">再キャリブレ</button>
       <button id="btnPng">盤面をPNG保存</button>
       <button id="btnUndo">最終手を取消</button>
@@ -353,6 +354,10 @@ const S = {
   initialPosition: null,   // committed snapshot at the moment tracking started
   movesInitialized: false,
   suspiciousFrames: 0,
+  // Whether the broadcaster has pressed "開始" yet. Until then, stones are
+  // still recognized and shown locally, but moves are NOT counted and the
+  // viewer does not receive any move history.
+  gameStarted: false,
   turn: 'B',
   lastMoveTime: 0,
   vPrevMoveCount: 0,       // viewer side: previous move count for diff
@@ -415,6 +420,25 @@ function toast(msg, isErr){
   t._h = setTimeout(()=>t.classList.remove('show'), 2400);
 }
 function clamp(v,a,b){return v<a?a:v>b?b:v}
+function updateGameStateUI(){
+  const ind = document.getElementById('gameStateInd');
+  const start = document.getElementById('btnStart');
+  const restart = document.getElementById('btnRestart');
+  if(!ind || !start || !restart) return;
+  if(S.gameStarted){
+    ind.textContent = '対局中';
+    ind.style.background = 'rgba(124,255,167,.18)';
+    ind.style.color = '#7cffa7';
+    start.style.display = 'none';
+    restart.style.display = '';
+  } else {
+    ind.textContent = '準備中（開始を押すまで手数は数えません）';
+    ind.style.background = 'rgba(244,208,63,.18)';
+    ind.style.color = '#f4d03f';
+    start.style.display = '';
+    restart.style.display = 'none';
+  }
+}
 function median(arr){
   const a = arr.slice().sort((x,y)=>x-y);
   const n = a.length;
@@ -1153,8 +1177,8 @@ function detectFrame(){
     }
   }
   commitFromHistory();
-  // Move tracking
-  if(S.trackMoves) trackMoves();
+  // Move tracking — only after the broadcaster has pressed 開始
+  if(S.trackMoves && S.gameStarted) trackMoves();
   // Counts
   let bc=0, wc=0;
   for(let i=0;i<N;i++) for(let j=0;j<N;j++){
@@ -1364,19 +1388,31 @@ function drawBoardCanvas(canvasId, override){
         ctx.fillText(String(k+1), x, y);
       }
     }
-    // Last move marker — always drawn at the most recent move's intersection,
-    // even if the stone is currently captured (ko cycles etc.). A bold red
-    // circle on top of the stone, plus a bright centre dot for high contrast
-    // against both black and white stones.
-    const last = (override && override.lastMove) || (S.moves.length ? S.moves[S.moves.length-1] : null);
+    // Last move marker — drawn as a glowing ring along the *outside edge* of
+    // the stone so the move number in the centre stays clearly readable. If
+    // the stone has been captured (ko etc.), draw the ring on the empty
+    // intersection at stone size so the position is still obvious.
+    const last = (override && override.lastMove) || (moves && moves.length ? moves[moves.length-1] : null);
     if(last && last.x != null && last.y != null && last.x >= 0 && last.x < N && last.y >= 0 && last.y < N){
       const x = margin + last.x*step;
       const y = margin + last.y*step;
-      ctx.beginPath(); ctx.arc(x, y, step*0.22, 0, Math.PI*2);
-      ctx.strokeStyle = '#ff2d2d';
-      ctx.lineWidth = Math.max(3, step*0.085);
+      const r = stoneR;
+      // Soft outer halo
+      ctx.beginPath();
+      ctx.arc(x, y, r * 1.15, 0, Math.PI*2);
+      ctx.strokeStyle = 'rgba(255,45,45,0.45)';
+      ctx.lineWidth = Math.max(2, step*0.08);
       ctx.stroke();
-      ctx.beginPath(); ctx.arc(x, y, step*0.085, 0, Math.PI*2);
+      // Crisp ring hugging the stone's outline
+      ctx.beginPath();
+      ctx.arc(x, y, r * 0.98, 0, Math.PI*2);
+      ctx.strokeStyle = '#ff2d2d';
+      ctx.lineWidth = Math.max(2, step*0.07);
+      ctx.stroke();
+      // Tiny corner tick at top-right so the marker is still visible if two
+      // last-move rings happen to land on adjacent points
+      ctx.beginPath();
+      ctx.arc(x + r*0.72, y - r*0.72, Math.max(1.5, step*0.06), 0, Math.PI*2);
       ctx.fillStyle = '#ff2d2d';
       ctx.fill();
     }
@@ -1534,12 +1570,14 @@ function startPeerHost(forceNewId){
   });
 }
 function snapshotState(){
+  const tracking = S.trackMoves && S.gameStarted;
   return {
     type: 'state',
     size: S.size,
     committed: S.committed,
-    moves: S.trackMoves ? S.moves : [],
-    initialPosition: (S.trackMoves && S.movesInitialized) ? S.initialPosition : null,
+    moves: tracking ? S.moves : [],
+    initialPosition: (tracking && S.movesInitialized) ? S.initialPosition : null,
+    started: S.gameStarted,
     turn: S.turn,
     ts: Date.now(),
   };
@@ -1676,6 +1714,13 @@ function renderViewerBoard(){
   $('vMoveCount').textContent = total;
   $('vMoveLabel').textContent = idx;
   $('vMoveTotal').textContent = total;
+  if(data.started === false){
+    $('vTurn').textContent = '対局前（カウント前）';
+    $('vTurn').style.color = '#f4d03f';
+  } else {
+    $('vTurn').textContent = '';
+    $('vTurn').style.color = '';
+  }
   const sl = $('vSlider');
   if(+sl.max !== total) sl.max = total;
   if(+sl.value !== idx) sl.value = idx;
@@ -1795,7 +1840,9 @@ async function enterBroadcast(){
   S.movesInitialized = false;
   S.initialPosition = null;
   S.suspiciousFrames = 0;
+  S.gameStarted = false;
   $('moveCount').textContent = 0;
+  updateGameStateUI();
   // Sync UI to settings
   $('blackTh').value = S.blackTh; $('blackVal').textContent = S.blackTh;
   $('whiteTh').value = S.whiteTh; $('whiteVal').textContent = S.whiteTh;
@@ -1888,7 +1935,9 @@ function changeSize(n){
   S.movesInitialized = false;
   S.initialPosition = null;
   S.suspiciousFrames = 0;
+  S.gameStarted = false;
   $('moveCount').textContent = 0;
+  updateGameStateUI();
   setActiveSize(n);
   drawBoardCanvas('boardB');
   drawOverlay();
@@ -1987,6 +2036,10 @@ function init(){
     initDetectionState();
     S.movesInitialized = false;
     S.initialPosition = null;
+    S.gameStarted = false;
+    S.moves = [];
+    $('moveCount').textContent = 0;
+    updateGameStateUI();
     saveSettings();
     drawOverlay();
     toast('隅をリセットしました - ドラッグで合わせて下さい');
@@ -1998,34 +2051,53 @@ function init(){
     initDetectionState();
     S.movesInitialized = false;
     S.initialPosition = null;
+    S.gameStarted = false;
+    S.moves = [];
+    $('moveCount').textContent = 0;
+    updateGameStateUI();
     saveSettings();
     drawOverlay();
     toast('盤を90°回転しました');
   });
-  $('btnClearMoves').addEventListener('click', ()=>{
-    S.moves = [];
-    $('moveCount').textContent = 0;
-    S.movesInitialized = false;
-    S.initialPosition = null;
-    S.suspiciousFrames = 0;
-    toast('履歴をクリア。次の安定検出を初期局面とします');
-  });
-  $('btnSetInitial').addEventListener('click', ()=>{
+  $('btnStart').addEventListener('click', ()=>{
     if(!S.committed){ toast('まだ盤面が認識されていません', true); return; }
     S.initialPosition = snapshotCommitted();
     syncPrevToCommitted();
     S.movesInitialized = true;
     S.moves = [];
     S.suspiciousFrames = 0;
+    S.gameStarted = true;
     $('moveCount').textContent = 0;
-    toast('現在の局面を初手前として設定');
+    updateGameStateUI();
+    drawBoardCanvas('boardB');
+    broadcastState();
+    toast('ゲーム開始 - ここからカウントします');
+  });
+  $('btnRestart').addEventListener('click', ()=>{
+    if(!S.committed){ toast('まだ盤面が認識されていません', true); return; }
+    if(!confirm('現在の手数をリセットして、いまの盤面を1手目の前として始め直しますか？')) return;
+    S.initialPosition = snapshotCommitted();
+    syncPrevToCommitted();
+    S.movesInitialized = true;
+    S.moves = [];
+    S.suspiciousFrames = 0;
+    S.gameStarted = true;
+    $('moveCount').textContent = 0;
+    updateGameStateUI();
+    drawBoardCanvas('boardB');
+    broadcastState();
+    toast('初期状態に戻しました（1手目から）');
   });
   $('btnRecalib').addEventListener('click', ()=>{
     initDetectionState();
     S.movesInitialized = false;
     S.initialPosition = null;
     S.suspiciousFrames = 0;
-    toast('検出履歴をクリアしました');
+    S.gameStarted = false;
+    S.moves = [];
+    $('moveCount').textContent = 0;
+    updateGameStateUI();
+    toast('検出履歴をクリア - 改めて「開始」を押してください');
   });
   $('btnSGF').addEventListener('click', generateSGF);
   $('btnPng').addEventListener('click', ()=>{
