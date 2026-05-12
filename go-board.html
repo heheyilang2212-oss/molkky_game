@@ -213,6 +213,10 @@ a{color:#7cb7ff}
           <input type="range" id="targetFps" min="2" max="20" value="8">
         </div>
         <div class="sRow">
+          <div class="sHead">手が引いてから確定までの秒数 <span class="v" id="settleVal">2.0s</span></div>
+          <input type="range" id="settleDelay" min="0" max="50" step="1" value="20">
+        </div>
+        <div class="sRow">
           <div class="togRow"><input type="checkbox" id="dbgOverlay"> <label for="dbgOverlay">認識結果をカメラに重ねて表示</label></div>
         </div>
         <div class="sRow">
@@ -339,6 +343,12 @@ const S = {
   // Occlusion rejection
   lastAcceptedClass: null,
   consecutiveRejects: 0,
+  // Motion settle (freezes recognition while a hand is in view; resumes N s after motion stops)
+  lastMotionTime: 0,
+  prevSmall: null,
+  settleDelayMs: 2000,
+  motionLevel: 0,
+  _wasSettled: false,
   // Peer
   peer: null,
   peerId: null,
@@ -385,6 +395,7 @@ function loadSettings(){
     if(typeof j.whiteTh === 'number') S.whiteTh = j.whiteTh;
     if(typeof j.histDepth === 'number') S.histDepth = j.histDepth;
     if(typeof j.targetFps === 'number') S.targetFps = j.targetFps;
+    if(typeof j.settleDelayMs === 'number') S.settleDelayMs = j.settleDelayMs;
     if(typeof j.dbgOverlay === 'boolean') S.dbgOverlay = j.dbgOverlay;
     if(typeof j.autoTurn === 'boolean') S.autoTurn = j.autoTurn;
     if(typeof j.trackMoves === 'boolean') S.trackMoves = j.trackMoves;
@@ -402,6 +413,7 @@ function saveSettings(){
       whiteTh: S.whiteTh,
       histDepth: S.histDepth,
       targetFps: S.targetFps,
+      settleDelayMs: S.settleDelayMs,
       dbgOverlay: S.dbgOverlay,
       autoTurn: S.autoTurn,
       trackMoves: S.trackMoves,
@@ -664,6 +676,46 @@ function drawOverlay(){
     ctx.textBaseline = 'middle';
     ctx.fillText((i+1).toString(), p.x, p.y);
   }
+
+  // Freeze-state banner (visible while motion is detected or the settle countdown is running)
+  const _now = Date.now();
+  const _sinceMotion = S.lastMotionTime ? (_now - S.lastMotionTime) : Infinity;
+  const _isMoving = S.motionLevel >= 0.04;
+  let _txt = null, _col = null;
+  if(_isMoving){ _txt = '⏸ 動き検知中（手が通過しています）'; _col = '#ff9d3a'; }
+  else if(S.settleDelayMs > 0 && _sinceMotion < S.settleDelayMs){
+    const rem = ((S.settleDelayMs - _sinceMotion)/1000).toFixed(1);
+    _txt = '⏳ ' + rem + 's 後に確定';
+    _col = '#f4d03f';
+  }
+  if(_txt){
+    const fs = Math.max(13, Math.round(ov.height * 0.030));
+    ctx.font = 'bold ' + fs + 'px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const tw = ctx.measureText(_txt).width;
+    const padX = 14, padY = 7, r = 10;
+    const bw = tw + padX*2, bh = fs + padY*2;
+    const bx = (ov.width - bw) / 2, by = Math.max(10, ov.height * 0.02);
+    ctx.beginPath();
+    ctx.moveTo(bx+r, by);
+    ctx.lineTo(bx+bw-r, by);
+    ctx.quadraticCurveTo(bx+bw, by, bx+bw, by+r);
+    ctx.lineTo(bx+bw, by+bh-r);
+    ctx.quadraticCurveTo(bx+bw, by+bh, bx+bw-r, by+bh);
+    ctx.lineTo(bx+r, by+bh);
+    ctx.quadraticCurveTo(bx, by+bh, bx, by+bh-r);
+    ctx.lineTo(bx, by+r);
+    ctx.quadraticCurveTo(bx, by, bx+r, by);
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(0,0,0,.78)';
+    ctx.fill();
+    ctx.strokeStyle = _col;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.fillStyle = _col;
+    ctx.fillText(_txt, bx + bw/2, by + bh/2);
+  }
 }
 function findHandle(x,y){
   if(!S.corners) return -1;
@@ -721,6 +773,10 @@ function initDetectionState(){
   S.prevCommitted = Array.from({length:N}, ()=>Array.from({length:N}, ()=>'.'));
   S.lastAcceptedClass = null;
   S.consecutiveRejects = 0;
+  S.prevSmall = null;
+  S.lastMotionTime = 0;
+  S._wasSettled = false;
+  S.motionLevel = 0;
 }
 function pushHistory(i, j, val){
   const buf = S.history[i][j];
@@ -747,6 +803,48 @@ function commitFromHistory(){
     }
   }
 }
+// Compute a coarse motion metric over the board region by comparing a
+// downsampled grayscale snapshot against the previous one. Returns a value in
+// [0,1] = fraction of pixels that changed significantly. Used to freeze stone
+// recognition while a hand is reaching across the board.
+function computeMotion(imgData, cornersPx, prevSmall){
+  const W = imgData.width, H = imgData.height;
+  const data = imgData.data;
+  let minX = W, minY = H, maxX = 0, maxY = 0;
+  for(const c of cornersPx){
+    if(c.x < minX) minX = c.x;
+    if(c.y < minY) minY = c.y;
+    if(c.x > maxX) maxX = c.x;
+    if(c.y > maxY) maxY = c.y;
+  }
+  const pad = 6;
+  minX = Math.max(0, Math.floor(minX) - pad);
+  minY = Math.max(0, Math.floor(minY) - pad);
+  maxX = Math.min(W - 1, Math.ceil(maxX) + pad);
+  maxY = Math.min(H - 1, Math.ceil(maxY) + pad);
+  const bw = maxX - minX, bh = maxY - minY;
+  if(bw < 8 || bh < 8) return { small: null, motion: 0 };
+  const SW = 48, SH = 48;
+  const small = new Uint8Array(SW * SH);
+  for(let y=0; y<SH; y++){
+    const sy = minY + ((y * bh) / SH) | 0;
+    for(let x=0; x<SW; x++){
+      const sx = minX + ((x * bw) / SW) | 0;
+      const o = (sy * W + sx) * 4;
+      small[y*SW + x] = (data[o]*0.299 + data[o+1]*0.587 + data[o+2]*0.114) | 0;
+    }
+  }
+  let motion = 0;
+  if(prevSmall && prevSmall.length === small.length){
+    let count = 0;
+    for(let k=0; k<small.length; k++){
+      if(Math.abs(small[k] - prevSmall[k]) > 18) count++;
+    }
+    motion = count / small.length;
+  }
+  return { small, motion };
+}
+
 function detectFrame(){
   if(!S.videoEl || !S.videoEl.videoWidth) return;
   ensureCorners();
@@ -767,6 +865,42 @@ function detectFrame(){
   const data = imgData.data;
   const W = cnv.width, H = cnv.height;
   const cornersPx = S.corners.map(c=>({ x: c.x*W, y: c.y*H }));
+
+  // ---- Motion settle gate ---------------------------------------------------
+  // Freeze recognition while there is movement in the board area, and for
+  // `settleDelayMs` afterwards. This prevents a hand reaching across the board
+  // from wiping the committed stones. When the gate releases, we snap the
+  // history to the current frame so the new state takes effect immediately.
+  const motionInfo = computeMotion(imgData, cornersPx, S.prevSmall);
+  S.prevSmall = motionInfo.small;
+  S.motionLevel = motionInfo.motion;
+  const _now = Date.now();
+  // 4% of the sampled pixels changing significantly = motion. Tolerates minor
+  // camera shake / lighting wobble, but catches hands crossing the board.
+  const motionTh = 0.04;
+  const isMoving = motionInfo.motion >= motionTh;
+  if(isMoving){
+    S.lastMotionTime = _now;
+    S._wasSettled = false;
+  }
+  const sinceMotion = S.lastMotionTime ? (_now - S.lastMotionTime) : Infinity;
+  const isFrozen = isMoving || (S.settleDelayMs > 0 && sinceMotion < S.settleDelayMs);
+  if(isFrozen){
+    let sCol, sLbl;
+    if(isMoving){ sCol = '#ff9d3a'; sLbl = '動き検知（待機中）'; }
+    else {
+      const remaining = Math.max(0, (S.settleDelayMs - sinceMotion) / 1000);
+      sCol = '#f4d03f';
+      sLbl = '安定待ち ' + remaining.toFixed(1) + 's';
+    }
+    $('stableDot').style.background = sCol;
+    $('stableLbl').textContent = sLbl;
+    drawBoardCanvas('boardB');
+    drawOverlay();
+    return;
+  }
+  // ---------------------------------------------------------------------------
+
   const Hg = makeHomography(cornersPx);
   const N = S.size;
   // Estimate grid spacing in pixels
@@ -849,6 +983,25 @@ function detectFrame(){
       cls[i][j] = (v < lref - S.blackTh) ? 'B' : (v > lref + S.whiteTh) ? 'W' : '.';
     }
   }
+  // On the first frame after the settle gate releases, snap the history to
+  // the current classification so the committed state reflects the new scene
+  // immediately rather than slowly bleeding in over ~1 s of voting. We only
+  // do this once motion has actually been observed — initial startup keeps
+  // the normal warm-up so the user has time to align the corners.
+  if(!S._wasSettled){
+    if(S.lastMotionTime > 0){
+      for(let i=0;i<N;i++){
+        for(let j=0;j<N;j++){
+          const v = cls[i][j];
+          S.history[i][j] = Array.from({length: S.histDepth}, ()=>v);
+        }
+      }
+      S.lastAcceptedClass = cls.map(row=>row.slice());
+      S.consecutiveRejects = 0;
+    }
+    S._wasSettled = true;
+  }
+
   // Occlusion / spike rejection: if this frame's classification differs from the
   // last accepted frame by too many cells at once, the camera was likely partially
   // covered (a hand reaching to play, etc.). Skip it from the history so the
@@ -1394,6 +1547,7 @@ async function enterBroadcast(){
   $('whiteTh').value = S.whiteTh; $('whiteVal').textContent = S.whiteTh;
   $('histDepth').value = S.histDepth; $('histVal').textContent = S.histDepth;
   $('targetFps').value = S.targetFps; $('fpsVal').textContent = S.targetFps;
+  $('settleDelay').value = Math.round(S.settleDelayMs/100); $('settleVal').textContent = (S.settleDelayMs/1000).toFixed(1) + 's';
   $('dbgOverlay').checked = S.dbgOverlay;
   $('autoTurn').checked = S.autoTurn;
   $('trackMoves').checked = S.trackMoves;
@@ -1539,6 +1693,11 @@ function init(){
   $('whiteTh').addEventListener('input', e=>{ S.whiteTh = +e.target.value; $('whiteVal').textContent = S.whiteTh; saveSettings(); });
   $('histDepth').addEventListener('input', e=>{ S.histDepth = +e.target.value; $('histVal').textContent = S.histDepth; saveSettings(); });
   $('targetFps').addEventListener('input', e=>{ S.targetFps = +e.target.value; $('fpsVal').textContent = S.targetFps; saveSettings(); });
+  $('settleDelay').addEventListener('input', e=>{
+    S.settleDelayMs = (+e.target.value) * 100;
+    $('settleVal').textContent = (S.settleDelayMs/1000).toFixed(1) + 's';
+    saveSettings();
+  });
   $('dbgOverlay').addEventListener('change', e=>{ S.dbgOverlay = e.target.checked; saveSettings(); drawOverlay(); });
   $('autoTurn').addEventListener('change', e=>{ S.autoTurn = e.target.checked; saveSettings(); });
   $('trackMoves').addEventListener('change', e=>{ S.trackMoves = e.target.checked; saveSettings(); });
