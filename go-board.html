@@ -155,6 +155,9 @@ a{color:#7cb7ff}
     <input id="joinId" placeholder="部屋IDを入力" maxlength="16" autocomplete="off">
     <button id="btnJoin">参加</button>
   </div>
+  <div class="joinRow" style="margin-top:6px">
+    <input id="viewerNameInput" placeholder="観戦者名（任意・配信側に表示されます）" maxlength="24" autocomplete="off">
+  </div>
   <div class="info">配信側が表示する部屋IDを入力するか、配信側が共有したURLを開いてください。</div>
   <div class="err" id="modeErr"></div>
 </section>
@@ -199,10 +202,14 @@ a{color:#7cb7ff}
         <span class="val url" id="viewUrl">--</span>
         <button id="copyUrl">コピー</button>
       </div>
-      <div class="row">
-        <span class="lbl">視聴者</span>
-        <span class="val" id="viewerCount">0</span>
-        <span style="color:#666;font-size:.72rem">名接続中</span>
+      <div class="row" style="flex-direction:column;align-items:stretch;gap:4px">
+        <div style="display:flex;align-items:center;gap:8px">
+          <span class="lbl">視聴者</span>
+          <span class="val" id="viewerCount">0</span>
+          <span style="color:#666;font-size:.72rem">名接続中</span>
+          <button id="btnViewerList" style="margin-left:auto;font-size:.72rem;padding:2px 8px;border-radius:10px;border:1px solid rgba(255,255,255,.2);background:rgba(255,255,255,.06);color:#fff">▽ 名前一覧</button>
+        </div>
+        <div id="viewerList" style="display:none;font-size:.78rem;color:#ddd;background:rgba(0,0,0,.25);border-radius:6px;padding:6px 8px;max-height:140px;overflow-y:auto"></div>
       </div>
     </div>
     <details class="settings">
@@ -302,6 +309,10 @@ a{color:#7cb7ff}
       <canvas id="boardV" width="500" height="500"></canvas>
     </div>
     <div class="vStatus" id="vStatus">接続中...</div>
+    <div style="display:flex;justify-content:center;align-items:center;gap:6px;font-size:.78rem;color:#aaa;margin:4px 0">
+      <span>観戦者名</span>
+      <input id="vNameEdit" maxlength="24" placeholder="(匿名)" style="flex:0 0 160px;padding:4px 8px;border-radius:6px;border:1px solid rgba(255,255,255,.18);background:rgba(0,0,0,.25);color:#fff">
+    </div>
     <div id="vPlayers" style="display:none;font-size:.85rem;color:#f4d03f;text-align:center;margin:4px 0;line-height:1.4"></div>
     <div class="vMeta">
       <span>黒 <b id="vBCount">0</b></span>
@@ -388,6 +399,13 @@ const S = {
   blackName: '',
   whiteName: '',
   gameName: '',
+  // Viewer-side display name. Saved in localStorage; sent to the broadcaster
+  // via a 'hello' DataConnection message so the broadcaster can list who is
+  // watching.
+  viewerName: '',
+  // Broadcaster-side: per-connection metadata (display name etc.) keyed by
+  // PeerJS DataConnection object. Not persisted.
+  connInfo: null,
   // Empty-board reference: per-cell V/S captured when the board is empty.
   // When set, classification uses this as the baseline instead of the running
   // row/column median, which dramatically reduces false positives caused by
@@ -486,6 +504,27 @@ function updateRefBoardUI(){
     clr.style.display = 'none';
   }
 }
+function updateViewerListUI(){
+  const cnt = document.getElementById('viewerCount');
+  const list = document.getElementById('viewerList');
+  if(!cnt) return;
+  cnt.textContent = S.conns.length;
+  if(!list) return;
+  if(!S.conns.length){
+    list.innerHTML = '<em style="color:#888">まだ誰も観戦していません</em>';
+    return;
+  }
+  const items = S.conns.map(c => {
+    const meta = S.connInfo && S.connInfo.get(c);
+    const nm = (meta && meta.name && meta.name.trim()) || '(匿名)';
+    return '<div>・' + escapeHtml(nm) + '</div>';
+  }).join('');
+  list.innerHTML = items;
+}
+function getViewerName(conn){
+  const meta = S.connInfo && S.connInfo.get(conn);
+  return (meta && meta.name && meta.name.trim()) || '(匿名)';
+}
 function updateCalibModeUI(){
   const sel = document.getElementById('calibMode');
   const hint = document.getElementById('calibModeHint');
@@ -562,6 +601,7 @@ function loadSettings(){
     if(typeof j.blackName === 'string') S.blackName = j.blackName;
     if(typeof j.whiteName === 'string') S.whiteName = j.whiteName;
     if(typeof j.gameName === 'string') S.gameName = j.gameName;
+    if(typeof j.viewerName === 'string') S.viewerName = j.viewerName;
     if(j.selectedCamId) S.selectedCamId = j.selectedCamId;
   }catch(e){}
 }
@@ -584,6 +624,7 @@ function saveSettings(){
       blackName: S.blackName,
       whiteName: S.whiteName,
       gameName: S.gameName,
+      viewerName: S.viewerName,
       selectedCamId: S.selectedCamId,
     }));
   }catch(e){}
@@ -1788,18 +1829,42 @@ function startPeerHost(forceNewId){
   S.peer.on('connection', (conn)=>{
     conn.on('open', ()=>{
       S.conns.push(conn);
-      $('viewerCount').textContent = S.conns.length;
+      if(!S.connInfo) S.connInfo = new Map();
+      S.connInfo.set(conn, { name: '', announced: false });
+      updateViewerListUI();
       // Send initial snapshot
       sendStateTo(conn);
     });
-    conn.on('close', ()=>{
-      S.conns = S.conns.filter(c=>c!==conn);
-      $('viewerCount').textContent = S.conns.length;
+    conn.on('data', (data)=>{
+      if(!data || data.type !== 'hello') return;
+      if(!S.connInfo) S.connInfo = new Map();
+      const meta = S.connInfo.get(conn) || { name: '', announced: false };
+      const raw = (typeof data.name === 'string') ? data.name.trim().slice(0, 32) : '';
+      const newName = raw || '(匿名)';
+      const isFirstHello = !meta.announced;
+      const isNameChange = meta.announced && meta.name !== newName;
+      meta.name = newName;
+      meta.announced = true;
+      S.connInfo.set(conn, meta);
+      updateViewerListUI();
+      if(isFirstHello){
+        toast('👁 ' + newName + ' さんが入室しました');
+      } else if(isNameChange){
+        toast('👁 ' + newName + ' に名前変更');
+      }
     });
-    conn.on('error', ()=>{
+    const handleGone = ()=>{
+      const meta = S.connInfo && S.connInfo.get(conn);
+      const name = (meta && meta.name) || '(匿名)';
+      if(S.connInfo) S.connInfo.delete(conn);
       S.conns = S.conns.filter(c=>c!==conn);
-      $('viewerCount').textContent = S.conns.length;
-    });
+      updateViewerListUI();
+      if(meta && meta.announced){
+        toast('👁 ' + name + ' さんが退室しました');
+      }
+    };
+    conn.on('close', handleGone);
+    conn.on('error', handleGone);
   });
   S.peer.on('disconnected', ()=>{
     setLiveBadge('再接続中');
@@ -2022,6 +2087,11 @@ function viewerStartPlayback(){
   }, 900);
 }
 
+function sendViewerHello(){
+  if(!S.conn || !S.conn.open) return;
+  try{ S.conn.send({ type: 'hello', name: (S.viewerName || '').slice(0, 32) }); }
+  catch(e){}
+}
 function connectToHost(shortId){
   if(!S.peer) return;
   const targetId = PEER_PREFIX + shortId;
@@ -2030,6 +2100,7 @@ function connectToHost(shortId){
   S.conn = conn;
   conn.on('open', ()=>{
     setVStatus('接続済み', 'connected');
+    sendViewerHello();
   });
   conn.on('data', (data)=>{
     if(data && data.type === 'state'){
@@ -2107,10 +2178,12 @@ async function enterBroadcast(){
   S.initialPosition = null;
   S.suspiciousFrames = 0;
   S.gameStarted = false;
+  S.connInfo = new Map();
   $('moveCount').textContent = 0;
   updateGameStateUI();
   updateRefBoardUI();
   updateStoneCalibUI();
+  updateViewerListUI();
   // Sync UI to settings
   $('blackTh').value = S.blackTh; $('blackVal').textContent = S.blackTh;
   $('whiteTh').value = S.whiteTh; $('whiteVal').textContent = S.whiteTh;
@@ -2172,10 +2245,12 @@ function exitBroadcast(){
   stopCamera();
   if(S.peer){ try{ S.peer.destroy(); }catch(e){} S.peer = null; }
   S.conns = [];
+  S.connInfo = null;
   showScreen('modeSelect');
 }
 function enterView(shortId){
   showScreen('viewScreen');
+  if($('vNameEdit')) $('vNameEdit').value = S.viewerName || '';
   S.vViewIndex = 0;
   S.vAtLive = true;
   S.vIsPlaying = false;
@@ -2267,6 +2342,13 @@ function init(){
       const v = $('joinId').value.trim().toUpperCase();
       if(v) enterView(v);
     }
+  });
+  // Viewer name input (mode-select screen)
+  $('viewerNameInput').value = S.viewerName || '';
+  $('viewerNameInput').addEventListener('input', e=>{
+    S.viewerName = (e.target.value || '').slice(0, 32);
+    saveSettings();
+    if($('vNameEdit')) $('vNameEdit').value = S.viewerName;
   });
 
   // Broadcaster controls
@@ -2536,6 +2618,27 @@ function init(){
 
   // Viewer controls
   $('vExit').addEventListener('click', exitView);
+  // In-viewer name edit (debounced re-hello so we don't spam the broadcaster)
+  let _vNameTimer = null;
+  $('vNameEdit').addEventListener('input', e=>{
+    S.viewerName = (e.target.value || '').slice(0, 32);
+    saveSettings();
+    if($('viewerNameInput')) $('viewerNameInput').value = S.viewerName;
+    clearTimeout(_vNameTimer);
+    _vNameTimer = setTimeout(sendViewerHello, 600);
+  });
+  // Broadcaster: toggle viewer list
+  $('btnViewerList').addEventListener('click', ()=>{
+    const list = $('viewerList');
+    const btn = $('btnViewerList');
+    if(list.style.display === 'none'){
+      list.style.display = '';
+      btn.textContent = '△ 名前一覧';
+    } else {
+      list.style.display = 'none';
+      btn.textContent = '▽ 名前一覧';
+    }
+  });
   function syncViewerToggleLabels(){
     $('vSoundBtn').textContent = (S.soundOn ? '🔔 音オン' : '🔇 音オフ');
     $('vNumBtn').textContent = '手数表示 ' + (S.showMoveNum ? 'オン' : 'オフ');
