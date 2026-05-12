@@ -231,7 +231,13 @@ a{color:#7cb7ff}
           <input type="range" id="settleDelay" min="0" max="50" step="1" value="20">
         </div>
         <div class="sRow">
-          <div class="togRow"><input type="checkbox" id="squareMode"> <label for="squareMode">正方形固定モード（角=サイズ、中=移動）</label></div>
+          <div class="sHead">校正モード</div>
+          <select id="calibMode" style="width:100%;padding:6px 8px;border-radius:6px;background:rgba(0,0,0,.3);color:#fff;border:1px solid rgba(255,255,255,.18)">
+            <option value="free">自由配置（4隅を独立に動かす）</option>
+            <option value="square">正方形固定（真上撮影：角=サイズ、中=移動）</option>
+            <option value="trapezoid">左右対称の台形（横撮影：上下の幅を独立調整、上下反転可）</option>
+          </select>
+          <div id="calibModeHint" style="font-size:.7rem;color:#aaa;margin-top:4px"></div>
         </div>
         <div class="sRow">
           <div class="togRow"><input type="checkbox" id="dbgOverlay"> <label for="dbgOverlay">認識結果をカメラに重ねて表示</label></div>
@@ -273,6 +279,7 @@ a{color:#7cb7ff}
       <button id="btnClearCalib" style="display:none">見本をクリア</button>
       <button id="btnReset">隅をリセット</button>
       <button id="btnRotate">盤を90°回転</button>
+      <button id="btnFlipTrap" style="display:none" title="台形の上下を入れ替え（遠近反転）">▼▲ 上下を反転</button>
       <button id="btnRecalib">再キャリブレ</button>
       <button id="btnPng">盤面をPNG保存</button>
       <button id="btnUndo">最終手を取消</button>
@@ -323,7 +330,7 @@ a{color:#7cb7ff}
 
 <div id="toast"></div>
 
-<script src="https://unpkg.com/peerjs@1.5.5/dist/peerjs.min.js"></script>
+<script src="https://unpkg.com/peerjs@1.5.5/dist/peerjs.min.js" integrity="sha384-x0YgkOr/3UOZP2CRDxGW9e0Q+2Qjyr3uJrm4xU32Y7ZCNAo7Cc7bjhrZMi/dwczu" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 <script>
 'use strict';
 
@@ -429,10 +436,12 @@ const S = {
   // UI
   draggingHandle: -1,
   _dragTrans: null,        // active translate-drag (square mode), holds last px point
-  // Calibration mode: when true, all four corners are constrained to form an
-  // axis-aligned square. Useful for top-down phone shots where perspective is
-  // negligible, so the user only adjusts size and position.
-  squareMode: false,
+  // Calibration mode:
+  //  'free'      = each corner moves independently (default; for any angle).
+  //  'square'    = axis-aligned square (top-down shots; tweak size + position).
+  //  'trapezoid' = left/right symmetric trapezoid (for side-on shots where the
+  //                far edge looks shorter than the near edge).
+  calibMode: 'free',
   // Offscreen
   procCanvas: null,
   procCtx: null,
@@ -476,6 +485,19 @@ function updateRefBoardUI(){
     cap.style.borderColor = '';
     clr.style.display = 'none';
   }
+}
+function updateCalibModeUI(){
+  const sel = document.getElementById('calibMode');
+  const hint = document.getElementById('calibModeHint');
+  const flip = document.getElementById('btnFlipTrap');
+  if(!sel) return;
+  sel.value = S.calibMode;
+  if(hint){
+    if(S.calibMode === 'square') hint.textContent = '真上から撮るとき向け。角でサイズ、中をドラッグで全体を移動。';
+    else if(S.calibMode === 'trapezoid') hint.textContent = '横から撮るとき向け。上下それぞれの幅を独立に調整できます。「▼▲ 上下を反転」で遠い辺と近い辺を入れ替え。';
+    else hint.textContent = '4隅を独立に動かせるモード（既定）。';
+  }
+  if(flip) flip.style.display = (S.calibMode === 'trapezoid') ? '' : 'none';
 }
 function updateStoneCalibUI(){
   const cap = document.getElementById('btnCalibStones');
@@ -535,7 +557,8 @@ function loadSettings(){
     if(typeof j.trackMoves === 'boolean') S.trackMoves = j.trackMoves;
     if(typeof j.soundOn === 'boolean') S.soundOn = j.soundOn;
     if(typeof j.showMoveNum === 'boolean') S.showMoveNum = j.showMoveNum;
-    if(typeof j.squareMode === 'boolean') S.squareMode = j.squareMode;
+    if(typeof j.calibMode === 'string' && ['free','square','trapezoid'].includes(j.calibMode)) S.calibMode = j.calibMode;
+    else if(j.squareMode === true) S.calibMode = 'square';  // migrate
     if(typeof j.blackName === 'string') S.blackName = j.blackName;
     if(typeof j.whiteName === 'string') S.whiteName = j.whiteName;
     if(typeof j.gameName === 'string') S.gameName = j.gameName;
@@ -557,7 +580,7 @@ function saveSettings(){
       trackMoves: S.trackMoves,
       soundOn: S.soundOn,
       showMoveNum: S.showMoveNum,
-      squareMode: S.squareMode,
+      calibMode: S.calibMode,
       blackName: S.blackName,
       whiteName: S.whiteName,
       gameName: S.gameName,
@@ -907,8 +930,8 @@ function squareTranslate(dxPx, dyPx){
   const cs = S.corners.map(normToOverlay);
   setCornersFromPx(cs.map(p => ({ x: p.x + dxPx, y: p.y + dyPx })));
 }
-// Hit test: is (x, y) inside the current quad's bounding box (used by square
-// mode to start a translate drag)?
+// Hit test: is (x, y) inside the current quad's bounding box (used by square /
+// trapezoid modes to start a translate drag)?
 function isInsideQuadBox(x, y){
   const cs = S.corners.map(normToOverlay);
   let minX=Infinity, minY=Infinity, maxX=-Infinity, maxY=-Infinity;
@@ -919,6 +942,80 @@ function isInsideQuadBox(x, y){
     if(p.y>maxY) maxY=p.y;
   }
   return x >= minX && x <= maxX && y >= minY && y <= maxY;
+}
+// ============================================================
+// TRAPEZOID MODE (left/right symmetric, for side-on shots)
+// ============================================================
+// Convention: corners[0]=TL, [1]=TR, [2]=BR, [3]=BL. The trapezoid is symmetric
+// about a vertical axis x=cx. TL/TR share Y, BL/BR share Y, and
+// (TL.x + TR.x)/2 == (BL.x + BR.x)/2 == cx.
+function fitTrapezoidToCorners(){
+  if(!S.corners) ensureCorners();
+  const cs = S.corners.map(normToOverlay);
+  // Pair top and bottom by Y; smaller two Ys = top edge.
+  const idxByY = [0,1,2,3].sort((a,b)=>cs[a].y - cs[b].y);
+  const topIdx = [idxByY[0], idxByY[1]];
+  const botIdx = [idxByY[2], idxByY[3]];
+  const topY = (cs[topIdx[0]].y + cs[topIdx[1]].y) / 2;
+  const botY = (cs[botIdx[0]].y + cs[botIdx[1]].y) / 2;
+  const topL = Math.min(cs[topIdx[0]].x, cs[topIdx[1]].x);
+  const topR = Math.max(cs[topIdx[0]].x, cs[topIdx[1]].x);
+  const botL = Math.min(cs[botIdx[0]].x, cs[botIdx[1]].x);
+  const botR = Math.max(cs[botIdx[0]].x, cs[botIdx[1]].x);
+  const cx = ((topL + topR) / 2 + (botL + botR) / 2) / 2;
+  const topHW = Math.max(20, (topR - topL) / 2);
+  const botHW = Math.max(20, (botR - botL) / 2);
+  setCornersFromPx([
+    { x: cx - topHW, y: topY },  // TL
+    { x: cx + topHW, y: topY },  // TR
+    { x: cx + botHW, y: botY },  // BR
+    { x: cx - botHW, y: botY },  // BL
+  ]);
+}
+// Drag a corner in trapezoid mode: the partner corner on the same edge
+// mirrors automatically, and the cx axis stays fixed.
+function trapezoidDragCorner(idx, dragPx){
+  const cs = S.corners.map(normToOverlay);
+  const cx = ((cs[0].x + cs[1].x) / 2 + (cs[2].x + cs[3].x) / 2) / 2;
+  const topY = (cs[0].y + cs[1].y) / 2;
+  const botY = (cs[2].y + cs[3].y) / 2;
+  const onTop = (idx === 0 || idx === 1);
+  const onRight = (idx === 1 || idx === 2);
+  // Clamp so the corner stays on the correct side of the axis with some
+  // minimum half-width, and the top edge stays above the bottom edge.
+  const minHW = 14;
+  const minGap = 14;
+  let x = dragPx.x;
+  let y = dragPx.y;
+  if(onRight) x = Math.max(x, cx + minHW);
+  else        x = Math.min(x, cx - minHW);
+  if(onTop) y = Math.min(y, botY - minGap);
+  else      y = Math.max(y, topY + minGap);
+  const next = cs.slice();
+  const mirrorX = 2 * cx - x;
+  if(idx === 0){ next[0] = {x, y}; next[1] = {x: mirrorX, y}; }
+  else if(idx === 1){ next[1] = {x, y}; next[0] = {x: mirrorX, y}; }
+  else if(idx === 2){ next[2] = {x, y}; next[3] = {x: mirrorX, y}; }
+  else if(idx === 3){ next[3] = {x, y}; next[2] = {x: mirrorX, y}; }
+  setCornersFromPx(next);
+}
+function trapezoidTranslate(dxPx, dyPx){
+  const cs = S.corners.map(normToOverlay);
+  setCornersFromPx(cs.map(p => ({ x: p.x + dxPx, y: p.y + dyPx })));
+}
+// Vertically flip the trapezoid (swap top edge with bottom edge). Lets users
+// pick which physical board edge corresponds to the top of the screen when
+// shooting from the side.
+function flipTrapezoidVertical(){
+  if(!S.corners) return;
+  const cs = S.corners.map(normToOverlay);
+  // Compute bounding y, then mirror each y about its centre.
+  let minY = Infinity, maxY = -Infinity;
+  for(const p of cs){ if(p.y<minY) minY=p.y; if(p.y>maxY) maxY=p.y; }
+  const my = (minY + maxY) / 2;
+  // Also swap TL↔BL and TR↔BR so corner labels follow the flip.
+  const flipped = cs.map(p => ({ x: p.x, y: 2*my - p.y }));
+  setCornersFromPx([flipped[3], flipped[2], flipped[1], flipped[0]]);
 }
 
 function attachOverlayInput(){
@@ -940,7 +1037,7 @@ function attachOverlayInput(){
       e.preventDefault();
       return;
     }
-    if(S.squareMode && isInsideQuadBox(p.x, p.y)){
+    if((S.calibMode === 'square' || S.calibMode === 'trapezoid') && isInsideQuadBox(p.x, p.y)){
       S._dragTrans = { last: p };
       ov.setPointerCapture(e.pointerId);
       e.preventDefault();
@@ -949,8 +1046,10 @@ function attachOverlayInput(){
   ov.addEventListener('pointermove', e=>{
     const p = evtPos(e);
     if(S.draggingHandle >= 0){
-      if(S.squareMode){
+      if(S.calibMode === 'square'){
         squareDragResize(S.draggingHandle, p);
+      } else if(S.calibMode === 'trapezoid'){
+        trapezoidDragCorner(S.draggingHandle, p);
       } else {
         S.corners[S.draggingHandle] = overlayToNorm(p.x, p.y);
       }
@@ -962,7 +1061,8 @@ function attachOverlayInput(){
       const dx = p.x - S._dragTrans.last.x;
       const dy = p.y - S._dragTrans.last.y;
       S._dragTrans.last = p;
-      squareTranslate(dx, dy);
+      if(S.calibMode === 'trapezoid') trapezoidTranslate(dx, dy);
+      else squareTranslate(dx, dy);
       drawOverlay();
       e.preventDefault();
     }
@@ -2018,7 +2118,8 @@ async function enterBroadcast(){
   $('targetFps').value = S.targetFps; $('fpsVal').textContent = S.targetFps;
   $('settleDelay').value = Math.round(S.settleDelayMs/100); $('settleVal').textContent = (S.settleDelayMs/1000).toFixed(1) + 's';
   $('dbgOverlay').checked = S.dbgOverlay;
-  $('squareMode').checked = S.squareMode;
+  $('calibMode').value = S.calibMode;
+  updateCalibModeUI();
   $('autoTurn').checked = S.autoTurn;
   $('trackMoves').checked = S.trackMoves;
   $('soundOn').checked = S.soundOn;
@@ -2187,16 +2288,27 @@ function init(){
     saveSettings();
   });
   $('dbgOverlay').addEventListener('change', e=>{ S.dbgOverlay = e.target.checked; saveSettings(); drawOverlay(); });
-  $('squareMode').addEventListener('change', e=>{
-    S.squareMode = e.target.checked;
-    if(S.squareMode){
+  $('calibMode').addEventListener('change', e=>{
+    S.calibMode = e.target.value;
+    if(S.calibMode === 'square'){
       fitSquareToCorners();
       toast('正方形モード: 角でサイズ、中をドラッグで移動');
+    } else if(S.calibMode === 'trapezoid'){
+      fitTrapezoidToCorners();
+      toast('台形モード: 上下の角で幅、中をドラッグで移動、▼▲で上下反転');
     } else {
       toast('自由配置モード');
     }
+    updateCalibModeUI();
     saveSettings();
     drawOverlay();
+  });
+  $('btnFlipTrap').addEventListener('click', ()=>{
+    if(S.calibMode !== 'trapezoid') return;
+    flipTrapezoidVertical();
+    saveSettings();
+    drawOverlay();
+    toast('台形を上下反転しました');
   });
   $('autoTurn').addEventListener('change', e=>{ S.autoTurn = e.target.checked; saveSettings(); });
   $('trackMoves').addEventListener('change', e=>{ S.trackMoves = e.target.checked; saveSettings(); });
