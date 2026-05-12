@@ -107,6 +107,18 @@ a{color:#7cb7ff}
 .vStatus.disconnected{color:#ff6b6b}
 .vMeta{display:flex;gap:14px;font-size:.72rem;color:#6b7c75}
 .vMeta b{color:#f4d03f}
+.vPlayer{display:flex;flex-direction:column;align-items:center;gap:6px;width:100%;max-width:520px;padding:6px 10px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);border-radius:12px}
+.vPlayer .vpBtns{display:flex;gap:6px;align-items:center;justify-content:center;width:100%}
+.vPlayer .vpBtns button{flex:0 0 auto;min-width:42px;padding:8px 10px;border-radius:10px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.16);color:#fff;font-size:1rem;line-height:1}
+.vPlayer .vpBtns button:active{transform:scale(.94)}
+.vPlayer .vpBtns button.live{background:rgba(231,76,60,.18);border-color:#ff6b6b;color:#ff6b6b;font-size:.72rem;font-weight:700;padding:8px 12px;min-width:auto}
+.vPlayer .vpBtns button.live.on{background:#ff3030;color:#fff;border-color:#ff3030;box-shadow:0 0 12px rgba(255,48,48,.45)}
+.vPlayer .vpBtns button.play.on{background:#f4d03f;color:#1a1a1a;border-color:#f4d03f}
+.vPlayer input[type=range]{width:100%;-webkit-appearance:none;appearance:none;height:6px;background:rgba(255,255,255,.1);border-radius:3px;outline:none;margin:2px 0}
+.vPlayer input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:22px;height:22px;border-radius:50%;background:#f4d03f;cursor:pointer}
+.vPlayer input[type=range]::-moz-range-thumb{width:22px;height:22px;border-radius:50%;background:#f4d03f;cursor:pointer;border:none}
+.vPlayer .vpLabel{font-size:.78rem;color:#aaa;letter-spacing:.5px}
+.vPlayer .vpLabel b{color:#f4d03f}
 
 /* ============================================================
    TOAST
@@ -277,6 +289,17 @@ a{color:#7cb7ff}
       <span>手数 <b id="vMoveCount">0</b></span>
       <span id="vTurn"></span>
     </div>
+    <div class="vPlayer">
+      <input type="range" id="vSlider" min="0" max="0" value="0" step="1">
+      <div class="vpBtns">
+        <button id="vToStart" title="最初へ">⏮</button>
+        <button id="vBack" title="1手戻る">◀</button>
+        <button id="vPlay" class="play" title="自動再生">▶</button>
+        <button id="vFwd" title="1手進む">▶▶</button>
+        <button id="vToLive" class="live on" title="ライブに戻る">LIVE</button>
+      </div>
+      <div class="vpLabel"><b id="vMoveLabel">0</b> / <span id="vMoveTotal">0</span> 手</div>
+    </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:center">
       <button id="vSoundBtn" style="padding:6px 14px;border-radius:18px;border:1px solid rgba(255,255,255,.2);background:rgba(255,255,255,.06);color:#fff;font-size:.78rem">🔇 音オフ</button>
       <button id="vNumBtn" style="padding:6px 14px;border-radius:18px;border:1px solid rgba(255,255,255,.2);background:rgba(255,255,255,.06);color:#fff;font-size:.78rem">手番表示 オフ</button>
@@ -334,6 +357,10 @@ const S = {
   lastMoveTime: 0,
   vPrevMoveCount: 0,       // viewer side: previous move count for diff
   vLatestState: null,      // viewer side: most recent state from broadcaster
+  vViewIndex: 0,           // viewer side: which move (0..moves.length) is being displayed
+  vAtLive: true,           // viewer side: locked to latest move?
+  vIsPlaying: false,       // viewer side: auto-advance running?
+  vPlayHandle: null,       // viewer side: setInterval handle for auto-play
   // Camera
   stream: null,
   videoEl: null,
@@ -578,14 +605,7 @@ function resizeOverlay(){
 }
 window.addEventListener('resize', ()=>{
   if(S.mode==='broadcast'){ resizeOverlay(); drawBoardCanvas('boardB'); }
-  else if(S.mode==='view' && S.vLatestState){
-    drawBoardCanvas('boardV', {
-      size: S.vLatestState.size,
-      committed: S.vLatestState.committed,
-      lastMove: S.vLatestState.moves && S.vLatestState.moves.length ? S.vLatestState.moves[S.vLatestState.moves.length-1] : null,
-      moves: S.vLatestState.moves,
-    });
-  }
+  else if(S.mode==='view' && S.vLatestState){ renderViewerBoard(); }
 });
 
 function videoDisplayRect(){
@@ -1201,8 +1221,11 @@ function trackMoves(){
     S.suspiciousFrames = 0;
     return;
   }
-  if(bDelta > 1 || wDelta > 1){
-    // Likely recognition flicker; wait. If it persists too long, force-resync.
+  // Allow several simultaneous changes per frame: when the broadcaster freezes
+  // for a couple of seconds at a time, a sequence of ordinary moves (e.g. a ko
+  // exchange or threat-and-response) can land in one diff. We only treat a diff
+  // as recognition noise if it is implausibly large.
+  if(newOnes.length > 6){
     S.suspiciousFrames++;
     if(S.suspiciousFrames > 40){
       syncPrevToCommitted();
@@ -1212,14 +1235,23 @@ function trackMoves(){
     return;
   }
   S.suspiciousFrames = 0;
-  // If both colors moved between samples (rare, only possible with very low FPS), record B first.
+  // Interleave the new stones based on whose turn it most likely was, so a
+  // batch of B/W changes lands in the SGF in a believable order.
   const bs = newOnes.filter(m=>m.c==='B');
   const ws = newOnes.filter(m=>m.c==='W');
-  for(const m of bs) S.moves.push({c:m.c, x:m.x, y:m.y, t: Date.now()});
-  for(const m of ws) S.moves.push({c:m.c, x:m.x, y:m.y, t: Date.now()});
+  const ordered = [];
+  let cur = S.turn === 'W' ? 'W' : 'B';
+  while(bs.length || ws.length){
+    if(cur === 'B' && bs.length){ ordered.push(bs.shift()); cur = 'W'; }
+    else if(cur === 'W' && ws.length){ ordered.push(ws.shift()); cur = 'B'; }
+    else if(bs.length){ ordered.push(bs.shift()); cur = 'W'; }
+    else { ordered.push(ws.shift()); cur = 'B'; }
+  }
+  const ts = Date.now();
+  for(const m of ordered) S.moves.push({c:m.c, x:m.x, y:m.y, t: ts});
   syncPrevToCommitted();
   $('moveCount').textContent = S.moves.length;
-  S.lastMoveTime = Date.now();
+  S.lastMoveTime = ts;
   playStoneClick();
 }
 
@@ -1332,15 +1364,21 @@ function drawBoardCanvas(canvasId, override){
         ctx.fillText(String(k+1), x, y);
       }
     }
-    // Last move marker
+    // Last move marker — always drawn at the most recent move's intersection,
+    // even if the stone is currently captured (ko cycles etc.). A bold red
+    // circle on top of the stone, plus a bright centre dot for high contrast
+    // against both black and white stones.
     const last = (override && override.lastMove) || (S.moves.length ? S.moves[S.moves.length-1] : null);
-    if(last && stones[last.x] && stones[last.x][last.y] === last.c){
+    if(last && last.x != null && last.y != null && last.x >= 0 && last.x < N && last.y >= 0 && last.y < N){
       const x = margin + last.x*step;
       const y = margin + last.y*step;
-      ctx.beginPath(); ctx.arc(x, y, step*0.18, 0, Math.PI*2);
-      ctx.strokeStyle = last.c==='B' ? '#ff5e3a' : '#d2421f';
-      ctx.lineWidth = Math.max(2, step*0.06);
+      ctx.beginPath(); ctx.arc(x, y, step*0.22, 0, Math.PI*2);
+      ctx.strokeStyle = '#ff2d2d';
+      ctx.lineWidth = Math.max(3, step*0.085);
       ctx.stroke();
+      ctx.beginPath(); ctx.arc(x, y, step*0.085, 0, Math.PI*2);
+      ctx.fillStyle = '#ff2d2d';
+      ctx.fill();
     }
   }
 }
@@ -1546,6 +1584,133 @@ function startPeerViewer(shortId){
     try{ S.peer.reconnect(); }catch(e){}
   });
 }
+// Apply a sequence of moves to a starting board, following Go capture rules
+// (remove enemy groups with no liberties; if the just-placed stone's own group
+// has no liberties after captures, remove it too — covers suicide, although
+// most rulesets forbid it). Used by the viewer to reconstruct intermediate
+// board positions for the playback slider.
+function applyMoves(initial, moves, upTo){
+  const N = initial.length;
+  const board = initial.map(row => row.slice());
+  const lim = Math.max(0, Math.min(upTo|0, moves ? moves.length : 0));
+  const nbrs = [[1,0],[-1,0],[0,1],[0,-1]];
+  function clearIfDead(sx, sy, color){
+    const stack = [[sx, sy]];
+    const seen = new Set();
+    const group = [];
+    let alive = false;
+    while(stack.length){
+      const [cx, cy] = stack.pop();
+      const key = cx*N + cy;
+      if(seen.has(key)) continue;
+      seen.add(key);
+      group.push([cx, cy]);
+      for(const [dx, dy] of nbrs){
+        const ex = cx+dx, ey = cy+dy;
+        if(ex<0||ex>=N||ey<0||ey>=N) continue;
+        const v = board[ex][ey];
+        if(v === '.') { alive = true; }
+        else if(v === color && !seen.has(ex*N + ey)) stack.push([ex, ey]);
+      }
+    }
+    if(!alive){ for(const [gx, gy] of group) board[gx][gy] = '.'; }
+  }
+  for(let k=0; k<lim; k++){
+    const mv = moves[k];
+    if(!mv) continue;
+    const x = mv.x, y = mv.y, c = mv.c;
+    if(x == null || y == null || x < 0 || x >= N || y < 0 || y >= N) continue;
+    if(c !== 'B' && c !== 'W') continue;
+    board[x][y] = c;
+    const opp = c === 'B' ? 'W' : 'B';
+    for(const [dx, dy] of nbrs){
+      const nx = x+dx, ny = y+dy;
+      if(nx<0||nx>=N||ny<0||ny>=N) continue;
+      if(board[nx][ny] === opp) clearIfDead(nx, ny, opp);
+    }
+    if(board[x][y] === c) clearIfDead(x, y, c);
+  }
+  return board;
+}
+
+function viewerTotalMoves(){
+  return S.vLatestState && S.vLatestState.moves ? S.vLatestState.moves.length : 0;
+}
+
+function renderViewerBoard(){
+  const data = S.vLatestState;
+  if(!data){
+    drawBoardCanvas('boardV', { size: S.size, committed: null });
+    $('vMoveLabel').textContent = '0';
+    $('vMoveTotal').textContent = '0';
+    return;
+  }
+  const N = data.size;
+  const total = (data.moves || []).length;
+  if(S.vAtLive) S.vViewIndex = total;
+  const idx = Math.max(0, Math.min(S.vViewIndex|0, total));
+  let board;
+  if(idx === total){
+    // Live: show the broadcaster's actually-recognized state. This is what the
+    // broadcaster sees, including any cells they manually corrected.
+    board = data.committed;
+  } else {
+    // Replay: reconstruct the board from initial position + recorded moves so
+    // captures (and ko cycles) come out correctly.
+    const initial = data.initialPosition || Array.from({length:N}, ()=>Array.from({length:N}, ()=>'.'));
+    board = applyMoves(initial, data.moves || [], idx);
+  }
+  const lastMove = idx > 0 ? (data.moves || [])[idx-1] : null;
+  drawBoardCanvas('boardV', {
+    size: N,
+    committed: board,
+    lastMove: lastMove,
+    moves: (data.moves || []).slice(0, idx),
+  });
+  let bc=0, wc=0;
+  for(const row of board) for(const c of row){
+    if(c==='B') bc++; else if(c==='W') wc++;
+  }
+  $('vBCount').textContent = bc;
+  $('vWCount').textContent = wc;
+  $('vMoveCount').textContent = total;
+  $('vMoveLabel').textContent = idx;
+  $('vMoveTotal').textContent = total;
+  const sl = $('vSlider');
+  if(+sl.max !== total) sl.max = total;
+  if(+sl.value !== idx) sl.value = idx;
+  // Turn indicator reflects the position being shown
+  if(lastMove){
+    const nextTurn = lastMove.c === 'B' ? 'W' : 'B';
+    $('vTurn').innerHTML = '手番: <b>' + (nextTurn==='B'?'黒●':'白○') + '</b>';
+  } else if(data.turn){
+    $('vTurn').innerHTML = '手番: <b>' + (data.turn==='B'?'黒●':'白○') + '</b>';
+  }
+  // Live badge
+  const live = $('vToLive');
+  if(live) live.classList.toggle('on', S.vAtLive);
+}
+
+function viewerStopPlayback(){
+  S.vIsPlaying = false;
+  if(S.vPlayHandle){ clearInterval(S.vPlayHandle); S.vPlayHandle = null; }
+  const btn = $('vPlay');
+  if(btn){ btn.textContent = '▶'; btn.classList.remove('on'); }
+}
+function viewerStartPlayback(){
+  if(S.vIsPlaying) return;
+  S.vIsPlaying = true;
+  S.vAtLive = false;
+  const btn = $('vPlay');
+  if(btn){ btn.textContent = '⏸'; btn.classList.add('on'); }
+  S.vPlayHandle = setInterval(()=>{
+    const total = viewerTotalMoves();
+    if(S.vViewIndex >= total){ viewerStopPlayback(); return; }
+    S.vViewIndex = Math.min(total, S.vViewIndex + 1);
+    renderViewerBoard();
+  }, 900);
+}
+
 function connectToHost(shortId){
   if(!S.peer) return;
   const targetId = PEER_PREFIX + shortId;
@@ -1558,25 +1723,12 @@ function connectToHost(shortId){
   conn.on('data', (data)=>{
     if(data && data.type === 'state'){
       S.vLatestState = data;
-      drawBoardCanvas('boardV', {
-        size: data.size,
-        committed: data.committed,
-        lastMove: data.moves && data.moves.length ? data.moves[data.moves.length-1] : null,
-        moves: data.moves,
-      });
-      let bc=0, wc=0;
-      for(const row of data.committed) for(const c of row){
-        if(c==='B') bc++; else if(c==='W') wc++;
-      }
-      $('vBCount').textContent = bc;
-      $('vWCount').textContent = wc;
       const mvCount = (data.moves||[]).length;
-      if(mvCount > S.vPrevMoveCount && S.vPrevMoveCount > 0){
+      if(mvCount > S.vPrevMoveCount && S.vPrevMoveCount > 0 && S.vAtLive){
         playStoneClick();
       }
       S.vPrevMoveCount = mvCount;
-      $('vMoveCount').textContent = mvCount;
-      $('vTurn').innerHTML = '手番: <b>' + (data.turn==='B'?'黒●':'白○') + '</b>';
+      renderViewerBoard();
       const lat = data.ts ? Math.max(0, Date.now() - data.ts) : null;
       const latStr = lat !== null ? '  遅延 ' + lat + 'ms' : '';
       setVStatus('受信中  ' + new Date().toLocaleTimeString() + latStr, 'connected');
@@ -1705,10 +1857,19 @@ function exitBroadcast(){
 }
 function enterView(shortId){
   showScreen('viewScreen');
+  S.vViewIndex = 0;
+  S.vAtLive = true;
+  S.vIsPlaying = false;
+  S.vPrevMoveCount = 0;
+  if(S.vPlayHandle){ clearInterval(S.vPlayHandle); S.vPlayHandle = null; }
+  $('vSlider').max = 0; $('vSlider').value = 0;
+  $('vMoveLabel').textContent = '0';
+  $('vMoveTotal').textContent = '0';
   startPeerViewer(shortId);
   drawBoardCanvas('boardV', { size: S.size, committed: null });
 }
 function exitView(){
+  viewerStopPlayback();
   if(S.conn){ try{ S.conn.close(); }catch(e){} S.conn = null; }
   if(S.peer){ try{ S.peer.destroy(); }catch(e){} S.peer = null; }
   clearTimeout(S.reconnectTimer);
@@ -1931,14 +2092,51 @@ function init(){
     S.showMoveNum = !S.showMoveNum;
     saveSettings();
     syncViewerToggleLabels();
-    if(S.vLatestState){
-      drawBoardCanvas('boardV', {
-        size: S.vLatestState.size,
-        committed: S.vLatestState.committed,
-        lastMove: S.vLatestState.moves && S.vLatestState.moves.length ? S.vLatestState.moves[S.vLatestState.moves.length-1] : null,
-        moves: S.vLatestState.moves,
-      });
+    if(S.vLatestState) renderViewerBoard();
+  });
+  // Player controls
+  $('vToStart').addEventListener('click', ()=>{
+    viewerStopPlayback();
+    S.vAtLive = false;
+    S.vViewIndex = 0;
+    renderViewerBoard();
+  });
+  $('vBack').addEventListener('click', ()=>{
+    viewerStopPlayback();
+    S.vAtLive = false;
+    S.vViewIndex = Math.max(0, S.vViewIndex - 1);
+    renderViewerBoard();
+  });
+  $('vFwd').addEventListener('click', ()=>{
+    const total = viewerTotalMoves();
+    S.vViewIndex = Math.min(total, S.vViewIndex + 1);
+    S.vAtLive = (S.vViewIndex === total);
+    renderViewerBoard();
+  });
+  $('vToLive').addEventListener('click', ()=>{
+    viewerStopPlayback();
+    S.vAtLive = true;
+    S.vViewIndex = viewerTotalMoves();
+    renderViewerBoard();
+  });
+  $('vPlay').addEventListener('click', ()=>{
+    if(S.vIsPlaying){ viewerStopPlayback(); }
+    else {
+      // If we're already at the live end, restart from beginning
+      if(S.vAtLive || S.vViewIndex >= viewerTotalMoves()){
+        S.vViewIndex = 0;
+        S.vAtLive = false;
+        renderViewerBoard();
+      }
+      viewerStartPlayback();
     }
+  });
+  $('vSlider').addEventListener('input', e=>{
+    viewerStopPlayback();
+    const total = viewerTotalMoves();
+    S.vViewIndex = Math.max(0, Math.min(total, +e.target.value));
+    S.vAtLive = (S.vViewIndex === total);
+    renderViewerBoard();
   });
   $('vSgfBtn').addEventListener('click', ()=>{
     if(!S.vLatestState){ toast('盤面データがまだ届いていません', true); return; }
