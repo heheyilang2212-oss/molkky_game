@@ -217,6 +217,9 @@ a{color:#7cb7ff}
           <input type="range" id="settleDelay" min="0" max="50" step="1" value="20">
         </div>
         <div class="sRow">
+          <div class="togRow"><input type="checkbox" id="squareMode"> <label for="squareMode">正方形固定モード（角=サイズ、中=移動）</label></div>
+        </div>
+        <div class="sRow">
           <div class="togRow"><input type="checkbox" id="dbgOverlay"> <label for="dbgOverlay">認識結果をカメラに重ねて表示</label></div>
         </div>
         <div class="sRow">
@@ -357,6 +360,11 @@ const S = {
   reconnectTimer: null,
   // UI
   draggingHandle: -1,
+  _dragTrans: null,        // active translate-drag (square mode), holds last px point
+  // Calibration mode: when true, all four corners are constrained to form an
+  // axis-aligned square. Useful for top-down phone shots where perspective is
+  // negligible, so the user only adjusts size and position.
+  squareMode: false,
   // Offscreen
   procCanvas: null,
   procCtx: null,
@@ -401,6 +409,7 @@ function loadSettings(){
     if(typeof j.trackMoves === 'boolean') S.trackMoves = j.trackMoves;
     if(typeof j.soundOn === 'boolean') S.soundOn = j.soundOn;
     if(typeof j.showMoveNum === 'boolean') S.showMoveNum = j.showMoveNum;
+    if(typeof j.squareMode === 'boolean') S.squareMode = j.squareMode;
     if(j.selectedCamId) S.selectedCamId = j.selectedCamId;
   }catch(e){}
 }
@@ -419,6 +428,7 @@ function saveSettings(){
       trackMoves: S.trackMoves,
       soundOn: S.soundOn,
       showMoveNum: S.showMoveNum,
+      squareMode: S.squareMode,
       selectedCamId: S.selectedCamId,
     }));
   }catch(e){}
@@ -725,6 +735,67 @@ function findHandle(x,y){
   }
   return -1;
 }
+
+// ----- Square-mode helpers --------------------------------------------------
+// Store any 4 pixel points back as normalized corners. No clamping (so the user
+// can drag a square slightly past the visible video edges if they want).
+function setCornersFromPx(ptsPx){
+  const r = videoDisplayRect();
+  if(!(r.w > 0 && r.h > 0)) return;
+  S.corners = ptsPx.map(p => ({ x: (p.x - r.x) / r.w, y: (p.y - r.y) / r.h }));
+}
+// Rebuild the four corners as an axis-aligned square centred on the current
+// quad's bounding box. Used when entering square mode for the first time.
+function fitSquareToCorners(){
+  if(!S.corners) ensureCorners();
+  const cs = S.corners.map(normToOverlay);
+  let minX=Infinity, minY=Infinity, maxX=-Infinity, maxY=-Infinity;
+  for(const p of cs){
+    if(p.x<minX) minX=p.x;
+    if(p.y<minY) minY=p.y;
+    if(p.x>maxX) maxX=p.x;
+    if(p.y>maxY) maxY=p.y;
+  }
+  const cxPx = (minX+maxX)/2, cyPx = (minY+maxY)/2;
+  const hs = Math.max(20, Math.max(maxX-minX, maxY-minY)/2);
+  // Preserve the rotation labels already in use (so the rotate button keeps
+  // working as expected). If the existing corner quadrant pattern is
+  // degenerate, fall back to canonical TL/TR/BR/BL.
+  const signs = cs.map(p => ({ sx: p.x < cxPx ? -1 : 1, sy: p.y < cyPx ? -1 : 1 }));
+  const distinct = new Set(signs.map(s => s.sx+','+s.sy)).size === 4;
+  const useSigns = distinct ? signs : [
+    {sx:-1, sy:-1}, {sx:+1, sy:-1}, {sx:+1, sy:+1}, {sx:-1, sy:+1}
+  ];
+  setCornersFromPx(useSigns.map(s => ({ x: cxPx + s.sx*hs, y: cyPx + s.sy*hs })));
+}
+// Resize the square around its centre so the dragged corner sits at dragPx.
+function squareDragResize(idx, dragPx){
+  const cs = S.corners.map(normToOverlay);
+  const cxPx = (cs[0].x + cs[2].x) / 2;
+  const cyPx = (cs[0].y + cs[2].y) / 2;
+  const signs = cs.map(p => ({ sx: p.x < cxPx ? -1 : 1, sy: p.y < cyPx ? -1 : 1 }));
+  const hs = Math.max(14, Math.max(Math.abs(dragPx.x - cxPx), Math.abs(dragPx.y - cyPx)));
+  setCornersFromPx(signs.map(s => ({ x: cxPx + s.sx*hs, y: cyPx + s.sy*hs })));
+}
+// Move the whole square by (dx, dy) overlay pixels.
+function squareTranslate(dxPx, dyPx){
+  const cs = S.corners.map(normToOverlay);
+  setCornersFromPx(cs.map(p => ({ x: p.x + dxPx, y: p.y + dyPx })));
+}
+// Hit test: is (x, y) inside the current quad's bounding box (used by square
+// mode to start a translate drag)?
+function isInsideQuadBox(x, y){
+  const cs = S.corners.map(normToOverlay);
+  let minX=Infinity, minY=Infinity, maxX=-Infinity, maxY=-Infinity;
+  for(const p of cs){
+    if(p.x<minX) minX=p.x;
+    if(p.y<minY) minY=p.y;
+    if(p.x>maxX) maxX=p.x;
+    if(p.y>maxY) maxY=p.y;
+  }
+  return x >= minX && x <= maxX && y >= minY && y <= maxY;
+}
+
 function attachOverlayInput(){
   const ov = $('overlay');
   function evtPos(e){
@@ -741,20 +812,40 @@ function attachOverlayInput(){
       S.draggingHandle = idx;
       ov.setPointerCapture(e.pointerId);
       drawOverlay();
+      e.preventDefault();
+      return;
     }
-    e.preventDefault();
+    if(S.squareMode && isInsideQuadBox(p.x, p.y)){
+      S._dragTrans = { last: p };
+      ov.setPointerCapture(e.pointerId);
+      e.preventDefault();
+    }
   });
   ov.addEventListener('pointermove', e=>{
-    if(S.draggingHandle < 0) return;
     const p = evtPos(e);
-    const n = overlayToNorm(p.x, p.y);
-    S.corners[S.draggingHandle] = n;
-    drawOverlay();
-    e.preventDefault();
+    if(S.draggingHandle >= 0){
+      if(S.squareMode){
+        squareDragResize(S.draggingHandle, p);
+      } else {
+        S.corners[S.draggingHandle] = overlayToNorm(p.x, p.y);
+      }
+      drawOverlay();
+      e.preventDefault();
+      return;
+    }
+    if(S._dragTrans){
+      const dx = p.x - S._dragTrans.last.x;
+      const dy = p.y - S._dragTrans.last.y;
+      S._dragTrans.last = p;
+      squareTranslate(dx, dy);
+      drawOverlay();
+      e.preventDefault();
+    }
   });
   function endDrag(e){
-    if(S.draggingHandle < 0) return;
+    if(S.draggingHandle < 0 && !S._dragTrans) return;
     S.draggingHandle = -1;
+    S._dragTrans = null;
     saveSettings();
     drawOverlay();
   }
@@ -1560,6 +1651,7 @@ async function enterBroadcast(){
   $('targetFps').value = S.targetFps; $('fpsVal').textContent = S.targetFps;
   $('settleDelay').value = Math.round(S.settleDelayMs/100); $('settleVal').textContent = (S.settleDelayMs/1000).toFixed(1) + 's';
   $('dbgOverlay').checked = S.dbgOverlay;
+  $('squareMode').checked = S.squareMode;
   $('autoTurn').checked = S.autoTurn;
   $('trackMoves').checked = S.trackMoves;
   $('soundOn').checked = S.soundOn;
@@ -1710,6 +1802,17 @@ function init(){
     saveSettings();
   });
   $('dbgOverlay').addEventListener('change', e=>{ S.dbgOverlay = e.target.checked; saveSettings(); drawOverlay(); });
+  $('squareMode').addEventListener('change', e=>{
+    S.squareMode = e.target.checked;
+    if(S.squareMode){
+      fitSquareToCorners();
+      toast('正方形モード: 角でサイズ、中をドラッグで移動');
+    } else {
+      toast('自由配置モード');
+    }
+    saveSettings();
+    drawOverlay();
+  });
   $('autoTurn').addEventListener('change', e=>{ S.autoTurn = e.target.checked; saveSettings(); });
   $('trackMoves').addEventListener('change', e=>{ S.trackMoves = e.target.checked; saveSettings(); });
   $('soundOn').addEventListener('change', e=>{
