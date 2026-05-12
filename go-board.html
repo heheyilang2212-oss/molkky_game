@@ -269,6 +269,8 @@ a{color:#7cb7ff}
       <button id="btnRestart">⟲ 初期状態に戻す（1手目から）</button>
       <button id="btnCaptureRef" title="盤に石が無い状態でこのボタンを押すと、木目や照明ムラを覚えて誤検出を減らせます">📷 空の盤面を基準として記録</button>
       <button id="btnClearRef" style="display:none">基準をクリア</button>
+      <button id="btnCalibStones" title="●黒を右上・右下の星、○白を左上・左下の星に置いてからこのボタン">🎯 黒白の見本を記録（4つの星に置く）</button>
+      <button id="btnClearCalib" style="display:none">見本をクリア</button>
       <button id="btnReset">隅をリセット</button>
       <button id="btnRotate">盤を90°回転</button>
       <button id="btnRecalib">再キャリブレ</button>
@@ -333,6 +335,13 @@ const STAR_POINTS = {
   13: [[3,3],[3,9],[9,3],[9,9],[6,6]],
   19: [[3,3],[3,9],[3,15],[9,3],[9,9],[9,15],[15,3],[15,9],[15,15]],
 };
+// Four corner-star intersections used for the 黒白の見本 calibration:
+// place ○白 on the TL/BL stars and ●黒 on the TR/BR stars.
+const CORNER_STAR_POINTS = {
+  9:  { white: [[2,2],[2,6]], black: [[6,2],[6,6]] },
+  13: { white: [[3,3],[3,9]], black: [[9,3],[9,9]] },
+  19: { white: [[3,3],[3,15]], black: [[15,3],[15,15]] },
+};
 const PROC_W = 640;          // downscaled processing width
 const PEER_PREFIX = 'goboard-';
 const STORAGE_KEY = 'goboard.settings.v1';
@@ -380,6 +389,11 @@ const S = {
   refBoard: null,        // { size:N, V:Float32Array(N*N), S:Float32Array(N*N), ts }
   _lastVs: null,
   _lastSs: null,
+  // Stone-color calibration: V/S learned from real black & white stones
+  // placed on the four corner-star points. When set, classification becomes
+  // a 3-way closest-anchor decision (empty / black / white) instead of
+  // relying on a single brightness threshold.
+  stoneCalib: null,      // { size, blackV, whiteV, blackS, whiteS, ts }
   turn: 'B',
   lastMoveTime: 0,
   vPrevMoveCount: 0,       // viewer side: previous move count for diff
@@ -457,6 +471,24 @@ function updateRefBoardUI(){
     clr.style.display = '';
   } else {
     cap.textContent = '📷 空の盤面を基準として記録';
+    cap.style.background = '';
+    cap.style.color = '';
+    cap.style.borderColor = '';
+    clr.style.display = 'none';
+  }
+}
+function updateStoneCalibUI(){
+  const cap = document.getElementById('btnCalibStones');
+  const clr = document.getElementById('btnClearCalib');
+  if(!cap || !clr) return;
+  if(S.stoneCalib && S.stoneCalib.size === S.size){
+    cap.textContent = '🎯 黒白の見本を再記録（見本あり）';
+    cap.style.background = 'rgba(124,255,167,.18)';
+    cap.style.color = '#7cffa7';
+    cap.style.borderColor = 'rgba(124,255,167,.4)';
+    clr.style.display = '';
+  } else {
+    cap.textContent = '🎯 黒白の見本を記録（4つの星に置く）';
     cap.style.background = '';
     cap.style.color = '';
     cap.style.borderColor = '';
@@ -1153,8 +1185,35 @@ function detectFrame(){
   // persistent shadows, and bowl/lid placement under the camera much better
   // than the running median.
   const haveRef = !!(S.refBoard && S.refBoard.size === N && S.refBoard.V && S.refBoard.V.length === N*N);
+  const haveCalib = !!(S.stoneCalib && S.stoneCalib.size === N);
   const cls = new Array(N);
-  if(haveRef){
+  if(haveCalib){
+    // 3-way nearest-anchor classification: each cell's V is compared to the
+    // learned black anchor, white anchor and the per-cell empty baseline (or
+    // global median if no empty-board reference has been captured). A small
+    // margin keeps borderline noise classified as empty.
+    const c = S.stoneCalib;
+    const refV = haveRef ? S.refBoard.V : null;
+    const satGate = Math.max(W_SAT_MAX, c.whiteS + 0.05);
+    const halfBlack = Math.abs(ref - c.blackV);
+    const halfWhite = Math.abs(c.whiteV - ref);
+    const baseMargin = Math.max(6, Math.min(halfBlack, halfWhite) * 0.10);
+    for(let i=0;i<N;i++){
+      cls[i] = new Array(N);
+      for(let j=0;j<N;j++){
+        const v = Vs[i*N + j];
+        const s = Ss[i*N + j];
+        const empV = refV ? refV[i*N + j] : ref;
+        const dE = Math.abs(v - empV);
+        const dB = Math.abs(v - c.blackV);
+        const dW = Math.abs(v - c.whiteV);
+        let val = '.';
+        if(dB < dW && dB + baseMargin < dE) val = 'B';
+        else if(dW < dB && dW + baseMargin < dE && s < satGate) val = 'W';
+        cls[i][j] = val;
+      }
+    }
+  } else if(haveRef){
     const refV = S.refBoard.V;
     for(let i=0;i<N;i++){
       cls[i] = new Array(N);
@@ -1951,6 +2010,7 @@ async function enterBroadcast(){
   $('moveCount').textContent = 0;
   updateGameStateUI();
   updateRefBoardUI();
+  updateStoneCalibUI();
   // Sync UI to settings
   $('blackTh').value = S.blackTh; $('blackVal').textContent = S.blackTh;
   $('whiteTh').value = S.whiteTh; $('whiteVal').textContent = S.whiteTh;
@@ -2048,9 +2108,11 @@ function changeSize(n){
   S.suspiciousFrames = 0;
   S.gameStarted = false;
   S.refBoard = null;
+  S.stoneCalib = null;
   $('moveCount').textContent = 0;
   updateGameStateUI();
   updateRefBoardUI();
+  updateStoneCalibUI();
   setActiveSize(n);
   drawBoardCanvas('boardB');
   drawOverlay();
@@ -2162,9 +2224,11 @@ function init(){
     S.gameStarted = false;
     S.moves = [];
     S.refBoard = null;
+    S.stoneCalib = null;
     $('moveCount').textContent = 0;
     updateGameStateUI();
     updateRefBoardUI();
+    updateStoneCalibUI();
     saveSettings();
     drawOverlay();
     toast('隅をリセットしました - ドラッグで合わせて下さい');
@@ -2179,9 +2243,11 @@ function init(){
     S.gameStarted = false;
     S.moves = [];
     S.refBoard = null;
+    S.stoneCalib = null;
     $('moveCount').textContent = 0;
     updateGameStateUI();
     updateRefBoardUI();
+    updateStoneCalibUI();
     saveSettings();
     drawOverlay();
     toast('盤を90°回転しました');
@@ -2262,6 +2328,50 @@ function init(){
     updateGameStateUI();
     updateRefBoardUI();
     toast('基準をクリア - 自動の局所基準で判定します');
+  });
+  $('btnCalibStones').addEventListener('click', ()=>{
+    const N = S.size;
+    const sp = CORNER_STAR_POINTS[N];
+    if(!sp){ toast(N+'路盤の星座標が未登録です', true); return; }
+    if(!S._lastVs || S._lastVs.length !== N*N){ toast('まだ盤面が認識できていません', true); return; }
+    const ok = confirm(
+      '黒石と白石を以下の星に置いてから OK を押してください:\n\n' +
+      '●黒石: 右上 / 右下 の星\n' +
+      '○白石: 左上 / 左下 の星\n\n' +
+      '（合計4個。星の真上に正確に置いてください）'
+    );
+    if(!ok) return;
+    let bV = 0, wV = 0, bS = 0, wS = 0;
+    for(const [i,j] of sp.black){ bV += S._lastVs[i*N+j]; bS += S._lastSs[i*N+j]; }
+    for(const [i,j] of sp.white){ wV += S._lastVs[i*N+j]; wS += S._lastSs[i*N+j]; }
+    bV /= sp.black.length; bS /= sp.black.length;
+    wV /= sp.white.length; wS /= sp.white.length;
+    if(bV >= wV - 20){
+      toast('明るさの差が小さすぎます。黒白を逆に置いていませんか？', true);
+      return;
+    }
+    S.stoneCalib = { size: N, blackV: bV, whiteV: wV, blackS: bS, whiteS: wS, ts: Date.now() };
+    initDetectionState();
+    S.gameStarted = false;
+    S.moves = [];
+    S.movesInitialized = false;
+    S.initialPosition = null;
+    $('moveCount').textContent = 0;
+    updateGameStateUI();
+    updateStoneCalibUI();
+    toast(`黒白の見本を記録（黒V=${bV.toFixed(0)} / 白V=${wV.toFixed(0)}）`);
+  });
+  $('btnClearCalib').addEventListener('click', ()=>{
+    S.stoneCalib = null;
+    initDetectionState();
+    S.gameStarted = false;
+    S.moves = [];
+    S.movesInitialized = false;
+    S.initialPosition = null;
+    $('moveCount').textContent = 0;
+    updateGameStateUI();
+    updateStoneCalibUI();
+    toast('黒白の見本をクリアしました');
   });
   $('btnSGF').addEventListener('click', generateSGF);
   $('btnPng').addEventListener('click', ()=>{
