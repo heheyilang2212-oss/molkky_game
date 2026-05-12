@@ -257,6 +257,11 @@ a{color:#7cb7ff}
       <span id="turnInd">手番: --</span>
       <span id="gameStateInd" style="margin-left:auto;padding:2px 10px;border-radius:10px;background:rgba(244,208,63,.15);color:#f4d03f;font-weight:600">準備中</span>
     </div>
+    <div class="players" style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:6px 0;font-size:.82rem;color:#ddd">
+      <label style="display:flex;align-items:center;gap:6px">●黒<input id="blackName" type="text" maxlength="40" placeholder="黒番の名前" style="width:140px;padding:4px 8px;border-radius:6px;border:1px solid rgba(255,255,255,.18);background:rgba(0,0,0,.25);color:#fff"></label>
+      <label style="display:flex;align-items:center;gap:6px">○白<input id="whiteName" type="text" maxlength="40" placeholder="白番の名前" style="width:140px;padding:4px 8px;border-radius:6px;border:1px solid rgba(255,255,255,.18);background:rgba(0,0,0,.25);color:#fff"></label>
+      <label style="display:flex;align-items:center;gap:6px">対局名<input id="gameName" type="text" maxlength="80" placeholder="(任意)" style="width:160px;padding:4px 8px;border-radius:6px;border:1px solid rgba(255,255,255,.18);background:rgba(0,0,0,.25);color:#fff"></label>
+    </div>
     <div class="actions">
       <button class="primary full" id="btnStart">▶ 開始（カウント開始）</button>
       <button id="btnRestart">⟲ 初期状態に戻す（1手目から）</button>
@@ -284,6 +289,7 @@ a{color:#7cb7ff}
       <canvas id="boardV" width="500" height="500"></canvas>
     </div>
     <div class="vStatus" id="vStatus">接続中...</div>
+    <div id="vPlayers" style="display:none;font-size:.85rem;color:#f4d03f;text-align:center;margin:4px 0;line-height:1.4"></div>
     <div class="vMeta">
       <span>黒 <b id="vBCount">0</b></span>
       <span>白 <b id="vWCount">0</b></span>
@@ -358,6 +364,10 @@ const S = {
   // still recognized and shown locally, but moves are NOT counted and the
   // viewer does not receive any move history.
   gameStarted: false,
+  // Player names — written into SGF as PB / PW and broadcast to viewers.
+  blackName: '',
+  whiteName: '',
+  gameName: '',
   turn: 'B',
   lastMoveTime: 0,
   vPrevMoveCount: 0,       // viewer side: previous move count for diff
@@ -420,6 +430,9 @@ function toast(msg, isErr){
   t._h = setTimeout(()=>t.classList.remove('show'), 2400);
 }
 function clamp(v,a,b){return v<a?a:v>b?b:v}
+function escapeHtml(s){
+  return String(s).replace(/[&<>"']/g, c=>({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
+}
 function updateGameStateUI(){
   const ind = document.getElementById('gameStateInd');
   const start = document.getElementById('btnStart');
@@ -461,6 +474,9 @@ function loadSettings(){
     if(typeof j.soundOn === 'boolean') S.soundOn = j.soundOn;
     if(typeof j.showMoveNum === 'boolean') S.showMoveNum = j.showMoveNum;
     if(typeof j.squareMode === 'boolean') S.squareMode = j.squareMode;
+    if(typeof j.blackName === 'string') S.blackName = j.blackName;
+    if(typeof j.whiteName === 'string') S.whiteName = j.whiteName;
+    if(typeof j.gameName === 'string') S.gameName = j.gameName;
     if(j.selectedCamId) S.selectedCamId = j.selectedCamId;
   }catch(e){}
 }
@@ -480,6 +496,9 @@ function saveSettings(){
       soundOn: S.soundOn,
       showMoveNum: S.showMoveNum,
       squareMode: S.squareMode,
+      blackName: S.blackName,
+      whiteName: S.whiteName,
+      gameName: S.gameName,
       selectedCamId: S.selectedCamId,
     }));
   }catch(e){}
@@ -1456,9 +1475,18 @@ function sgfCoord(x, y){
   // SGF columns/rows: 0..N-1 → 'a'..  (no skip)
   return String.fromCharCode(97 + x) + String.fromCharCode(97 + y);
 }
-function buildSGFFrom(N, initialBoard, currentBoard, moves, turn){
+function sgfText(s){
+  // Escape SGF SimpleText: \ and ] must be backslash-escaped; collapse newlines.
+  return String(s).replace(/\\/g, '\\\\').replace(/\]/g, '\\]').replace(/[\r\n]+/g, ' ');
+}
+function buildSGFFrom(N, initialBoard, currentBoard, moves, turn, meta){
   const date = new Date().toISOString().slice(0,10);
   let body = `(;FF[4]GM[1]CA[UTF-8]SZ[${N}]DT[${date}]AP[GoBoardCameraStream:1.0]`;
+  if(meta){
+    if(meta.gameName) body += `GN[${sgfText(meta.gameName)}]`;
+    if(meta.blackName) body += `PB[${sgfText(meta.blackName)}]`;
+    if(meta.whiteName) body += `PW[${sgfText(meta.whiteName)}]`;
+  }
   const initial = initialBoard || currentBoard;
   if(initial){
     const ab = [], aw = [];
@@ -1492,7 +1520,8 @@ function generateSGF(){
   const N = S.size;
   const initial = (S.trackMoves && S.movesInitialized && S.initialPosition) ? S.initialPosition : null;
   const moves = S.trackMoves ? S.moves : null;
-  const text = buildSGFFrom(N, initial, S.committed, moves, S.turn);
+  const meta = { blackName: S.blackName, whiteName: S.whiteName, gameName: S.gameName };
+  const text = buildSGFFrom(N, initial, S.committed, moves, S.turn, meta);
   downloadSGF(text, 'goboard');
   toast('SGF をダウンロードしました');
 }
@@ -1579,6 +1608,9 @@ function snapshotState(){
     initialPosition: (tracking && S.movesInitialized) ? S.initialPosition : null,
     started: S.gameStarted,
     turn: S.turn,
+    blackName: S.blackName || '',
+    whiteName: S.whiteName || '',
+    gameName: S.gameName || '',
     ts: Date.now(),
   };
 }
@@ -1721,6 +1753,21 @@ function renderViewerBoard(){
     $('vTurn').textContent = '';
     $('vTurn').style.color = '';
   }
+  const pEl = $('vPlayers');
+  if(pEl){
+    const b = (data.blackName||'').trim();
+    const w = (data.whiteName||'').trim();
+    const g = (data.gameName||'').trim();
+    if(b || w || g){
+      const line1 = g ? `<div><b>${escapeHtml(g)}</b></div>` : '';
+      const line2 = (b || w) ? `<div>●${escapeHtml(b || '黒')} vs ${escapeHtml(w || '白')}○</div>` : '';
+      pEl.innerHTML = line1 + line2;
+      pEl.style.display = '';
+    } else {
+      pEl.innerHTML = '';
+      pEl.style.display = 'none';
+    }
+  }
   const sl = $('vSlider');
   if(+sl.max !== total) sl.max = total;
   if(+sl.value !== idx) sl.value = idx;
@@ -1855,6 +1902,9 @@ async function enterBroadcast(){
   $('trackMoves').checked = S.trackMoves;
   $('soundOn').checked = S.soundOn;
   $('showMoveNum').checked = S.showMoveNum;
+  $('blackName').value = S.blackName || '';
+  $('whiteName').value = S.whiteName || '';
+  $('gameName').value = S.gameName || '';
   setActiveSize(S.size);
   drawBoardCanvas('boardB');
   await listCameras();
@@ -2031,6 +2081,16 @@ function init(){
     if(S.soundOn) playStoneClick();
   });
   $('showMoveNum').addEventListener('change', e=>{ S.showMoveNum = e.target.checked; saveSettings(); drawBoardCanvas('boardB'); });
+  function onPlayerNameChange(){
+    S.blackName = $('blackName').value.trim();
+    S.whiteName = $('whiteName').value.trim();
+    S.gameName = $('gameName').value.trim();
+    saveSettings();
+    broadcastState();
+  }
+  $('blackName').addEventListener('input', onPlayerNameChange);
+  $('whiteName').addEventListener('input', onPlayerNameChange);
+  $('gameName').addEventListener('input', onPlayerNameChange);
   $('btnReset').addEventListener('click', ()=>{
     S.corners = defaultCorners();
     initDetectionState();
@@ -2213,7 +2273,9 @@ function init(){
   $('vSgfBtn').addEventListener('click', ()=>{
     if(!S.vLatestState){ toast('盤面データがまだ届いていません', true); return; }
     const d = S.vLatestState;
-    const text = buildSGFFrom(d.size, d.initialPosition || null, d.committed, d.moves, d.turn);
+    const text = buildSGFFrom(d.size, d.initialPosition || null, d.committed, d.moves, d.turn, {
+      blackName: d.blackName, whiteName: d.whiteName, gameName: d.gameName
+    });
     downloadSGF(text, 'goboard_view');
     toast('SGFをダウンロード');
   });
