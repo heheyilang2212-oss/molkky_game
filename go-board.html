@@ -186,6 +186,11 @@ a{color:#7cb7ff}
     <div class="cam-area" id="camArea">
       <video id="cam" autoplay playsinline muted></video>
       <canvas id="overlay"></canvas>
+      <div id="zoomControls" style="position:absolute;bottom:8px;right:8px;display:flex;flex-direction:column;align-items:center;gap:4px;z-index:10">
+        <button id="btnZoomIn" style="width:40px;height:40px;border-radius:50%;background:rgba(0,0,0,.72);color:#fff;border:1px solid rgba(255,255,255,.45);font-size:1.5rem;line-height:1;display:flex;align-items:center;justify-content:center">＋</button>
+        <button id="btnZoomOut" style="width:40px;height:40px;border-radius:50%;background:rgba(0,0,0,.72);color:#fff;border:1px solid rgba(255,255,255,.45);font-size:1.5rem;line-height:1;display:flex;align-items:center;justify-content:center">－</button>
+        <div id="zoomLabel" style="font-size:.65rem;color:#fff;text-align:center;text-shadow:0 1px 3px #000;background:rgba(0,0,0,.6);border-radius:4px;padding:1px 5px;min-width:32px">標準</div>
+      </div>
       <div class="camHint">
         <div id="camHintMsg">カメラを起動してください</div>
         <button id="camRetry">もう一度試す</button>
@@ -193,6 +198,29 @@ a{color:#7cb7ff}
     </div>
     <div class="board-area">
       <canvas id="boardB" width="500" height="500"></canvas>
+    </div>
+    <div id="cornerNudge" style="background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:8px">
+      <div style="font-size:.75rem;color:#8aa899;font-weight:700">🔧 角の微調整（ドラッグが難しいとき）</div>
+      <div style="display:flex;gap:5px">
+        <button class="nudgeCornerBtn" data-idx="0" style="flex:1;padding:6px 3px;border-radius:6px;border:1px solid rgba(244,208,63,.5);background:rgba(244,208,63,.2);color:#f4d03f;font-size:.75rem;font-weight:700">左上</button>
+        <button class="nudgeCornerBtn" data-idx="1" style="flex:1;padding:6px 3px;border-radius:6px;border:1px solid rgba(255,255,255,.15);background:rgba(255,255,255,.06);color:#ddd;font-size:.75rem">右上</button>
+        <button class="nudgeCornerBtn" data-idx="2" style="flex:1;padding:6px 3px;border-radius:6px;border:1px solid rgba(255,255,255,.15);background:rgba(255,255,255,.06);color:#ddd;font-size:.75rem">右下</button>
+        <button class="nudgeCornerBtn" data-idx="3" style="flex:1;padding:6px 3px;border-radius:6px;border:1px solid rgba(255,255,255,.15);background:rgba(255,255,255,.06);color:#ddd;font-size:.75rem">左下</button>
+      </div>
+      <div style="display:flex;align-items:center;justify-content:center;gap:14px">
+        <div style="display:grid;grid-template-columns:repeat(3,44px);grid-template-rows:repeat(3,44px);gap:3px">
+          <div></div>
+          <button id="nudgeUp" style="border-radius:8px;border:1px solid rgba(255,255,255,.15);background:rgba(255,255,255,.08);color:#bbb;font-size:1.3rem">↑</button>
+          <div></div>
+          <button id="nudgeLeft" style="border-radius:8px;border:1px solid rgba(255,255,255,.15);background:rgba(255,255,255,.08);color:#bbb;font-size:1.3rem">←</button>
+          <div id="nudgeCornerLabel" style="display:flex;align-items:center;justify-content:center;font-size:.65rem;color:#f4d03f;text-align:center;line-height:1.2;font-weight:700">左上</div>
+          <button id="nudgeRight" style="border-radius:8px;border:1px solid rgba(255,255,255,.15);background:rgba(255,255,255,.08);color:#bbb;font-size:1.3rem">→</button>
+          <div></div>
+          <button id="nudgeDown" style="border-radius:8px;border:1px solid rgba(255,255,255,.15);background:rgba(255,255,255,.08);color:#bbb;font-size:1.3rem">↓</button>
+          <div></div>
+        </div>
+        <div style="font-size:.72rem;color:#666;max-width:110px;line-height:1.5">選んだ角を1タップ3px移動。繰り返して微調整。</div>
+      </div>
     </div>
     <div class="share">
       <div class="row">
@@ -330,6 +358,7 @@ a{color:#7cb7ff}
       <canvas id="boardV" width="500" height="500"></canvas>
     </div>
     <div class="vStatus" id="vStatus">接続中...</div>
+    <button id="btnVReconnect" style="display:none;margin:6px auto 0;padding:8px 22px;border-radius:20px;border:1px solid rgba(244,208,63,.5);background:rgba(244,208,63,.18);color:#f4d03f;font-size:.82rem;font-weight:700">🔄 今すぐ再接続</button>
     <div style="display:flex;justify-content:center;align-items:center;gap:6px;font-size:.78rem;color:#aaa;margin:4px 0">
       <span>観戦者名</span>
       <input id="vNameEdit" maxlength="24" placeholder="(匿名)" style="flex:0 0 160px;padding:4px 8px;border-radius:6px;border:1px solid rgba(255,255,255,.18);background:rgba(0,0,0,.25);color:#fff">
@@ -432,6 +461,19 @@ const CORNER_STAR_POINTS = {
 const PROC_W = 640;          // downscaled processing width
 const PEER_PREFIX = 'goboard-';
 const STORAGE_KEY = 'goboard.settings.v1';
+// ICE servers: multiple STUN + public TURN relay so viewers behind strict NAT
+// (e.g. mobile carrier NAT) can still connect via relay when direct P2P fails.
+const ICE_CONFIG = {
+  iceServers: [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun1.l.google.com:19302' },
+    { urls: 'stun:stun2.l.google.com:19302' },
+    { urls: 'stun:stun.cloudflare.com:3478' },
+    { urls: 'turn:openrelay.metered.ca:80',       username: 'openrelayproject', credential: 'openrelayproject' },
+    { urls: 'turn:openrelay.metered.ca:443',      username: 'openrelayproject', credential: 'openrelayproject' },
+    { urls: 'turns:openrelay.metered.ca:443',     username: 'openrelayproject', credential: 'openrelayproject' },
+  ],
+};
 
 // ============================================================
 // STATE
@@ -507,6 +549,7 @@ const S = {
   videoEl: null,
   cameras: [],
   selectedCamId: null,
+  zoomStep: 0,        // 0=widest, 1-10=progressively zoomed in
   // Loop
   loopHandle: null,
   lastProcTime: 0,
@@ -526,6 +569,7 @@ const S = {
   conns: [],               // broadcaster: list of viewer DataConnections
   conn: null,              // viewer: connection to broadcaster
   reconnectTimer: null,
+  viewShortId: null,       // viewer: room ID currently being viewed (for manual reconnect)
   // UI
   draggingHandle: -1,
   _dragTrans: null,        // active translate-drag (square mode), holds last px point
@@ -535,6 +579,11 @@ const S = {
   //  'trapezoid' = left/right symmetric trapezoid (for side-on shots where the
   //                far edge looks shorter than the near edge).
   calibMode: 'free',
+  // Board display rotation (0-3, incremented CW by the rotate button).
+  // Rotates the virtual board canvas so it matches the physical board orientation.
+  boardRotation: 0,
+  // When true, drawBoardCanvas overlays a guide showing which stars to place calibration stones.
+  showCalibGuide: false,
   // Offscreen
   procCanvas: null,
   procCtx: null,
@@ -816,6 +865,7 @@ function loadSettings(){
     if(typeof j.showMoveNum === 'boolean') S.showMoveNum = j.showMoveNum;
     if(typeof j.calibMode === 'string' && ['free','square','trapezoid'].includes(j.calibMode)) S.calibMode = j.calibMode;
     else if(j.squareMode === true) S.calibMode = 'square';  // migrate
+    if(typeof j.boardRotation === 'number') S.boardRotation = j.boardRotation & 3;
     if(typeof j.blackName === 'string') S.blackName = j.blackName;
     if(typeof j.whiteName === 'string') S.whiteName = j.whiteName;
     if(typeof j.gameName === 'string') S.gameName = j.gameName;
@@ -841,6 +891,7 @@ function saveSettings(){
       soundOn: S.soundOn,
       showMoveNum: S.showMoveNum,
       calibMode: S.calibMode,
+      boardRotation: S.boardRotation,
       blackName: S.blackName,
       whiteName: S.whiteName,
       gameName: S.gameName,
@@ -964,6 +1015,32 @@ function stopCamera(){
     S.stream = null;
   }
   if(S.videoEl) S.videoEl.srcObject = null;
+}
+async function applyZoom(delta){
+  const newStep = Math.max(0, Math.min(10, S.zoomStep + delta));
+  if(newStep === S.zoomStep) return;
+  S.zoomStep = newStep;
+  const label = $('zoomLabel');
+  if(label) label.textContent = newStep === 0 ? '標準' : '+' + newStep;
+  if(!S.stream) return;
+  const track = S.stream.getVideoTracks()[0];
+  if(!track) return;
+  try{
+    const caps = track.getCapabilities ? track.getCapabilities() : {};
+    if(caps.zoom && caps.zoom.max > caps.zoom.min){
+      const zMin = caps.zoom.min;
+      const zMax = caps.zoom.max;
+      const z = zMin + newStep * (zMax - zMin) / 10;
+      await track.applyConstraints({advanced:[{zoom: Math.round(z * 100) / 100}]});
+      return;
+    }
+  }catch(e){ console.warn('hardware zoom failed', e); }
+  // CSS transform fallback (display only; detection still reads the raw video frame)
+  if(S.videoEl){
+    const scale = 1 + newStep * 0.3;
+    S.videoEl.style.transform = scale > 1 ? `scale(${scale.toFixed(2)})` : '';
+    S.videoEl.style.transformOrigin = 'center center';
+  }
 }
 
 // ============================================================
@@ -1797,6 +1874,39 @@ function trackMoves(){
 }
 
 // ============================================================
+// CALIBRATION GUIDE OVERLAY (drawn inside board rotation context)
+// ============================================================
+function drawCalibGuide(ctx, N, W, margin, step){
+  const sp = CORNER_STAR_POINTS[N];
+  if(!sp) return;
+  const stoneR = step * 0.46;
+  function drawGuideStone(i, j, isBlack){
+    const x = margin + i*step;
+    const y = margin + j*step;
+    const pulse = 0.65 + 0.35 * Math.sin(Date.now() / 350);
+    ctx.beginPath();
+    ctx.arc(x, y, stoneR * 1.5, 0, Math.PI*2);
+    ctx.strokeStyle = isBlack ? `rgba(40,40,80,${pulse})` : `rgba(160,180,255,${pulse})`;
+    ctx.lineWidth = Math.max(2, step*0.12);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(x, y, stoneR, 0, Math.PI*2);
+    ctx.fillStyle = isBlack ? 'rgba(22,22,22,0.9)' : 'rgba(238,238,238,0.9)';
+    ctx.fill();
+    ctx.strokeStyle = isBlack ? 'rgba(255,255,255,0.22)' : 'rgba(0,0,0,0.25)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.fillStyle = isBlack ? '#eee' : '#222';
+    ctx.font = `bold ${Math.max(9, Math.round(step*0.36))}px sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(isBlack ? '●' : '○', x, y);
+  }
+  for(const [i,j] of sp.black) drawGuideStone(i, j, true);
+  for(const [i,j] of sp.white) drawGuideStone(i, j, false);
+}
+
+// ============================================================
 // BOARD RENDERING (Canvas, used by both broadcaster and viewer)
 // ============================================================
 function drawBoardCanvas(canvasId, override){
@@ -1812,11 +1922,15 @@ function drawBoardCanvas(canvasId, override){
   const want = Math.max(300, Math.min(720, Math.round((css.width||500) * dpr)));
   if(cnv.width !== want){ cnv.width = want; cnv.height = want; }
   const W = cnv.width;
+  const rot = (override && override.boardRotation != null) ? override.boardRotation : (S.boardRotation || 0);
   const margin = W * 0.04;
   const inner = W - margin*2;
   const step = inner / (N-1);
   // Background
   ctx.clearRect(0,0,W,W);
+  // Apply board rotation so the virtual board matches the physical camera orientation
+  ctx.save();
+  if(rot){ ctx.translate(W/2, W/2); ctx.rotate(rot * Math.PI/2); ctx.translate(-W/2, -W/2); }
   const grad = ctx.createLinearGradient(0,0,0,W);
   grad.addColorStop(0, '#e6c07a');
   grad.addColorStop(1, '#d4a55a');
@@ -1934,6 +2048,48 @@ function drawBoardCanvas(canvasId, override){
       ctx.fill();
     }
   }
+  // Calibration guide: stone placement indicators (drawn inside rotation so positions are correct)
+  if(S.showCalibGuide && canvasId === 'boardB') drawCalibGuide(ctx, N, W, margin, step);
+  ctx.restore(); // end board rotation
+  // Calibration guide instruction banner (outside rotation — always upright at bottom)
+  if(S.showCalibGuide && canvasId === 'boardB'){
+    const gfs = Math.max(10, Math.round(W * 0.034));
+    ctx.save();
+    const glines = ['【盤面正面（対局者目線）から見て】', '●黒 → 右上・右下 の星に置く', '○白 → 左上・左下 の星に置く'];
+    const glh = gfs * 1.6;
+    const gbh = glines.length * glh + 10;
+    const gbw = W * 0.84;
+    const gbx = (W - gbw) / 2;
+    const gby = W - gbh - 8;
+    ctx.fillStyle = 'rgba(8,14,8,0.90)';
+    ctx.fillRect(gbx, gby, gbw, gbh);
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    glines.forEach((line, ti)=>{
+      ctx.fillStyle = ti === 0 ? '#f4d03f' : ti === 1 ? '#aaa' : '#eee';
+      ctx.font = (ti === 0 ? '' : 'bold ') + gfs + 'px sans-serif';
+      ctx.fillText(line, W/2, gby + 5 + ti * glh);
+    });
+    ctx.restore();
+  }
+  // "↑ 上" indicator — always upright at the visual top of the canvas
+  {
+    const indFs = Math.max(11, Math.round(W * 0.040));
+    ctx.save();
+    ctx.font = `bold ${indFs}px sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const indText = '↑ 上';
+    const tw = ctx.measureText(indText).width;
+    const padX = 8, padY = 4;
+    const bw = tw + padX*2, bh = indFs + padY*2;
+    const bx = W/2 - bw/2, by = 3;
+    ctx.fillStyle = 'rgba(26,18,8,0.70)';
+    ctx.fillRect(bx, by, bw, bh);
+    ctx.fillStyle = '#f4d03f';
+    ctx.fillText(indText, W/2, by + bh/2);
+    ctx.restore();
+  }
 }
 
 // ============================================================
@@ -1944,10 +2100,15 @@ function attachBoardEdit(){
   cnv.addEventListener('click', (e)=>{
     if(!S.committed) return;
     const r = cnv.getBoundingClientRect();
-    const px = (e.clientX - r.left) * (cnv.width / r.width);
-    const py = (e.clientY - r.top) * (cnv.height / r.height);
+    let px = (e.clientX - r.left) * (cnv.width / r.width);
+    let py = (e.clientY - r.top) * (cnv.height / r.height);
     const N = S.size;
     const W = cnv.width;
+    // Un-rotate tap coordinates to match original stone grid
+    const rot = S.boardRotation || 0;
+    if(rot === 1){ const tmp=px; px=py; py=W-tmp; }
+    else if(rot === 2){ px=W-px; py=W-py; }
+    else if(rot === 3){ const tmp=px; px=W-py; py=tmp; }
     const margin = W * 0.04;
     const inner = W - margin*2;
     const step = inner / (N-1);
@@ -2063,7 +2224,7 @@ function startPeerHost(forceNewId){
   }
   const id = PEER_PREFIX + shortId;
   setLiveBadge('connecting');
-  S.peer = new Peer(id, { debug: 1 });
+  S.peer = new Peer(id, { debug: 1, config: ICE_CONFIG });
   S.peer.on('open', (pid)=>{
     S.peerId = pid;
     const shortId = pid.replace(PEER_PREFIX, '');
@@ -2174,26 +2335,33 @@ function broadcastState(){
 // ============================================================
 // PEERJS VIEWING
 // ============================================================
+let _reconnectAttempts = 0;
 function startPeerViewer(shortId){
   $('vRoomId').textContent = shortId;
+  S.viewShortId = shortId;
   if(typeof Peer === 'undefined'){
     setVStatus('PeerJS が読み込めません。ネット接続を確認してください', 'disconnected');
     return;
   }
   setVStatus('接続中...', 'connecting');
+  if(S.conn){ try{ S.conn.close(); }catch(e){} S.conn = null; }
   if(S.peer){ try{ S.peer.destroy(); }catch(e){} S.peer = null; }
-  S.peer = new Peer({ debug: 1 });
+  S.peer = new Peer({ debug: 1, config: ICE_CONFIG });
   S.peer.on('open', ()=>{
     connectToHost(shortId);
   });
   S.peer.on('error', (err)=>{
     console.warn('viewer peer error', err);
-    setVStatus('接続エラー: ' + (err.type || err.message || ''), 'disconnected');
+    const msg = err.type === 'peer-unavailable' ? '配信者が見つかりません（部屋IDを確認してください）' :
+                err.type === 'network' ? 'ネットワークエラー' :
+                '接続エラー: ' + (err.type || err.message || '');
+    setVStatus(msg, 'disconnected');
+    showReconnectBtn(shortId);
     scheduleReconnect(shortId);
   });
   S.peer.on('disconnected', ()=>{
-    setVStatus('切断 - 再接続中...', 'disconnected');
-    try{ S.peer.reconnect(); }catch(e){}
+    setVStatus('シグナリングサーバーから切断 - 再接続中...', 'disconnected');
+    setTimeout(()=>{ try{ S.peer && !S.peer.destroyed && S.peer.reconnect(); }catch(e){} }, 1500);
   });
 }
 // Apply a sequence of moves to a starting board, following Go capture rules
@@ -2351,12 +2519,26 @@ function sendViewerHello(){
   catch(e){}
 }
 function connectToHost(shortId){
-  if(!S.peer) return;
+  if(!S.peer || S.peer.destroyed) return;
   const targetId = PEER_PREFIX + shortId;
-  setVStatus('接続中...', 'connecting');
+  setVStatus('接続中...（経路を探しています）', 'connecting');
+  if(S.conn){ try{ S.conn.close(); }catch(e){} S.conn = null; }
   const conn = S.peer.connect(targetId, { reliable: true });
   S.conn = conn;
+  // Timeout: if WebRTC ICE negotiation takes too long (e.g. strict NAT without TURN),
+  // conn.on('open') never fires. Detect and retry.
+  const connTimeout = setTimeout(()=>{
+    if(!conn.open){
+      setVStatus('接続タイムアウト（NAT越えに失敗の可能性）- 再試行します...', 'disconnected');
+      try{ conn.close(); }catch(e){}
+      showReconnectBtn(shortId);
+      scheduleReconnect(shortId);
+    }
+  }, 18000);
   conn.on('open', ()=>{
+    clearTimeout(connTimeout);
+    _reconnectAttempts = 0;
+    hideReconnectBtn();
     setVStatus('接続済み', 'connected');
     sendViewerHello();
   });
@@ -2380,19 +2562,38 @@ function connectToHost(shortId){
     }
   });
   conn.on('close', ()=>{
+    clearTimeout(connTimeout);
     setVStatus('切断されました - 再接続します...', 'disconnected');
+    showReconnectBtn(shortId);
     scheduleReconnect(shortId);
   });
   conn.on('error', (e)=>{
+    clearTimeout(connTimeout);
     setVStatus('接続エラー - 再接続します...', 'disconnected');
+    showReconnectBtn(shortId);
     scheduleReconnect(shortId);
   });
 }
 function scheduleReconnect(shortId){
   clearTimeout(S.reconnectTimer);
+  // Exponential backoff: 3s → 4.5s → 6.75s … capped at 30s
+  const delay = Math.min(30000, 3000 * Math.pow(1.5, _reconnectAttempts));
+  _reconnectAttempts++;
+  const sec = Math.round(delay / 1000);
+  setVStatus(`切断 - ${sec}秒後に自動再接続（試行 ${_reconnectAttempts} 回目）`, 'disconnected');
   S.reconnectTimer = setTimeout(()=>{
     if(S.mode === 'view') startPeerViewer(shortId);
-  }, 3000);
+  }, delay);
+}
+function showReconnectBtn(shortId){
+  let btn = $('btnVReconnect');
+  if(!btn) return;
+  btn.style.display = '';
+  btn.onclick = ()=>{ _reconnectAttempts = 0; clearTimeout(S.reconnectTimer); startPeerViewer(shortId); };
+}
+function hideReconnectBtn(){
+  const btn = $('btnVReconnect');
+  if(btn) btn.style.display = 'none';
 }
 function setVStatus(text, cls){
   const el = $('vStatus');
@@ -2658,6 +2859,45 @@ function init(){
     try{ await startCamera(); resizeOverlay(); drawOverlay(); }
     catch(e){ toast('カメラ切替失敗: '+(e.message||e.name), true); }
   });
+  // Camera zoom buttons
+  $('btnZoomIn').addEventListener('click', ()=> applyZoom(1));
+  $('btnZoomOut').addEventListener('click', ()=> applyZoom(-1));
+  // Corner nudge panel
+  {
+    let _nudgeIdx = 0;
+    const NUDGE_PX = 3;
+    const CORNER_NAMES = ['左上','右上','右下','左下'];
+    function refreshNudgeSel(){
+      document.querySelectorAll('.nudgeCornerBtn').forEach(b=>{
+        const active = +b.dataset.idx === _nudgeIdx;
+        b.style.border = active ? '1px solid rgba(244,208,63,.5)' : '1px solid rgba(255,255,255,.15)';
+        b.style.background = active ? 'rgba(244,208,63,.2)' : 'rgba(255,255,255,.06)';
+        b.style.color = active ? '#f4d03f' : '#ddd';
+        b.style.fontWeight = active ? '700' : '';
+      });
+      const lbl = $('nudgeCornerLabel');
+      if(lbl) lbl.textContent = CORNER_NAMES[_nudgeIdx];
+    }
+    function doNudge(dx, dy){
+      ensureCorners();
+      const ov = $('overlay');
+      const r = ov ? ov.getBoundingClientRect() : {width:400, height:300};
+      const c = S.corners[_nudgeIdx];
+      S.corners[_nudgeIdx] = {
+        x: Math.max(0, Math.min(1, c.x + dx / r.width)),
+        y: Math.max(0, Math.min(1, c.y + dy / r.height)),
+      };
+      drawOverlay();
+      saveSettings();
+    }
+    document.querySelectorAll('.nudgeCornerBtn').forEach(btn=>{
+      btn.addEventListener('click', ()=>{ _nudgeIdx = +btn.dataset.idx; refreshNudgeSel(); });
+    });
+    $('nudgeUp').addEventListener('click',    ()=> doNudge(0, -NUDGE_PX));
+    $('nudgeDown').addEventListener('click',  ()=> doNudge(0,  NUDGE_PX));
+    $('nudgeLeft').addEventListener('click',  ()=> doNudge(-NUDGE_PX, 0));
+    $('nudgeRight').addEventListener('click', ()=> doNudge( NUDGE_PX, 0));
+  }
   document.querySelectorAll('.sizeBtns button').forEach(b=>{
     b.addEventListener('click', ()=>changeSize(+b.dataset.size));
   });
@@ -2749,6 +2989,7 @@ function init(){
     if(!S.corners) return;
     // Rotate corner labels 90° CW: TL←BL, TR←TL, BR←TR, BL←BR
     S.corners = [S.corners[3], S.corners[0], S.corners[1], S.corners[2]];
+    S.boardRotation = (S.boardRotation + 1) & 3;
     initDetectionState();
     S.movesInitialized = false;
     S.initialPosition = null;
@@ -2762,6 +3003,7 @@ function init(){
     updateStoneCalibUI();
     saveSettings();
     drawOverlay();
+    drawBoardCanvas('boardB');
     toast('↻ 時計回りに90°回転しました（左上→右上→右下→左下）');
   });
   $('btnStart').addEventListener('click', ()=>{
@@ -2856,32 +3098,72 @@ function init(){
     const sp = CORNER_STAR_POINTS[N];
     if(!sp){ toast(N+'路盤の星座標が未登録です', true); return; }
     if(!S._lastVs || S._lastVs.length !== N*N){ toast('まだ盤面が認識できていません', true); return; }
+    // Show guide on virtual board so user can see exactly where to place stones
+    S.showCalibGuide = true;
+    drawBoardCanvas('boardB');
+    const ba = document.querySelector('.board-area');
+    if(ba) ba.scrollIntoView({behavior:'smooth', block:'nearest'});
     const ok = confirm(
+      '【盤面正面（対局者目線）から見て — 撮影者目線ではありません】\n\n' +
       '黒石と白石を以下の星に置いてから OK を押してください:\n\n' +
-      '●黒石: 右上 / 右下 の星\n' +
-      '○白石: 左上 / 左下 の星\n\n' +
-      '（合計4個。星の真上に正確に置いてください）'
+      '●黒石 → 右上・右下 の星\n' +
+      '○白石 → 左上・左下 の星\n\n' +
+      '（合計4個。仮想盤に目印が表示されています）'
     );
-    if(!ok) return;
+    if(!ok){
+      S.showCalibGuide = false;
+      drawBoardCanvas('boardB');
+      return;
+    }
     let bV = 0, wV = 0, bS = 0, wS = 0;
     for(const [i,j] of sp.black){ bV += S._lastVs[i*N+j]; bS += S._lastSs[i*N+j]; }
     for(const [i,j] of sp.white){ wV += S._lastVs[i*N+j]; wS += S._lastSs[i*N+j]; }
     bV /= sp.black.length; bS /= sp.black.length;
     wV /= sp.white.length; wS /= sp.white.length;
     if(bV >= wV - 20){
+      S.showCalibGuide = false;
+      drawBoardCanvas('boardB');
       toast('明るさの差が小さすぎます。黒白を逆に置いていませんか？', true);
       return;
     }
     S.stoneCalib = { size: N, blackV: bV, whiteV: wV, blackS: bS, whiteS: wS, ts: Date.now() };
-    initDetectionState();
-    S.gameStarted = false;
-    S.moves = [];
-    S.movesInitialized = false;
-    S.initialPosition = null;
-    $('moveCount').textContent = 0;
-    updateGameStateUI();
     updateStoneCalibUI();
-    toast(`黒白の見本を記録（黒V=${bV.toFixed(0)} / 白V=${wV.toFixed(0)}）`);
+    toast(`見本を記録（黒V=${bV.toFixed(0)} / 白V=${wV.toFixed(0)}）`);
+    // Second step — explicitly ask the user to remove the calibration stones
+    // and then reset the detection state so the board reflects the actual
+    // (now-empty) physical position. Without this, the 4 calibration stones
+    // stay committed until the hysteresis voting (90% strong vote) catches
+    // up — and if removing them produces too little motion to trigger the
+    // settle-snap, the cells can get stuck. Doing an explicit reset here
+    // makes the flow deterministic.
+    setTimeout(()=>{
+      const ok2 = confirm(
+        '見本を記録しました。\n\n' +
+        '👉 盤面から 4 個の見本石を取り除いてから OK を押してください。\n\n' +
+        '（OK を押すと盤面をリセットして、今の状態（石を取り除いた状態）から認識を開始します）'
+      );
+      S.showCalibGuide = false;
+      if(ok2){
+        initDetectionState();
+        S.gameStarted = false;
+        S.moves = [];
+        S.movesInitialized = false;
+        S.initialPosition = null;
+        $('moveCount').textContent = 0;
+        // Force a snap on the next valid frame: pretend motion just happened
+        // and settle period has already passed, so the next detectFrame will
+        // snap history & committed to the freshly-detected (empty) cls.
+        S.lastMotionTime = Date.now() - S.settleDelayMs - 200;
+        S._wasSettled = false;
+        updateGameStateUI();
+        drawBoardCanvas('boardB');
+        broadcastState();
+        toast('盤面をリセットしました（取り除いた状態から認識開始）');
+      } else {
+        drawBoardCanvas('boardB');
+        toast('リセットせず校正のみ完了しました', true);
+      }
+    }, 80);
   });
   $('btnClearCalib').addEventListener('click', ()=>{
     S.stoneCalib = null;
