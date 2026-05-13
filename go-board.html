@@ -161,9 +161,9 @@ a{color:#7cb7ff}
     <button id="btnJoin">参加</button>
   </div>
   <div class="joinRow" style="margin-top:6px">
-    <input id="viewerNameInput" placeholder="観戦者名（任意・配信側に表示されます）" maxlength="24" autocomplete="off">
+    <input id="viewerNameInput" placeholder="観戦者名（必須・配信側に表示されます）" maxlength="24" autocomplete="off" required>
   </div>
-  <div class="info">配信側が表示する部屋IDを入力するか、配信側が共有したURLを開いてください。</div>
+  <div class="info">配信側が表示する部屋IDと、観戦者名を入力してから「参加」を押してください。</div>
   <div class="err" id="modeErr"></div>
 </section>
 
@@ -222,6 +222,13 @@ a{color:#7cb7ff}
     </div>
     <div class="board-area">
       <canvas id="boardB" width="500" height="500"></canvas>
+    </div>
+    <div id="calibPrompt" style="display:none;background:rgba(244,208,63,.12);border:2px solid #f4d03f;border-radius:10px;padding:14px;flex-direction:column;gap:10px">
+      <div id="calibPromptMsg" style="color:#f4d03f;font-weight:700;text-align:center;font-size:.95rem;line-height:1.5"></div>
+      <div style="display:flex;gap:10px;justify-content:center">
+        <button id="calibPromptOk" style="padding:10px 28px;border-radius:8px;border:none;background:#f4d03f;color:#1a1a1a;font-weight:700;font-size:.95rem;min-width:100px">OK</button>
+        <button id="calibPromptCancel" style="padding:10px 22px;border-radius:8px;border:1px solid rgba(255,255,255,.25);background:rgba(255,255,255,.06);color:#ddd;font-size:.9rem;min-width:100px">キャンセル</button>
+      </div>
     </div>
     <div class="share">
       <div class="row">
@@ -2258,7 +2265,16 @@ function startPeerHost(forceNewId){
         S.connInfo.set(conn, meta);
         updateViewerListUI();
         if(isFirstHello){
-          toast('👁 ' + newName + ' さんが入室しました');
+          // Suppress 入室 toast if the same name just left within 10s
+          // (i.e. they're reconnecting after a signaling hiccup).
+          if(!S._pendingDeparts) S._pendingDeparts = new Map();
+          if(S._pendingDeparts.has(newName)){
+            clearTimeout(S._pendingDeparts.get(newName));
+            S._pendingDeparts.delete(newName);
+            // silent re-entry
+          } else {
+            toast('👁 ' + newName + ' さんが入室しました');
+          }
         } else if(isNameChange){
           toast('👁 ' + newName + ' に名前変更');
         }
@@ -2277,7 +2293,18 @@ function startPeerHost(forceNewId){
       S.conns = S.conns.filter(c=>c!==conn);
       updateViewerListUI();
       if(meta && meta.announced){
-        toast('👁 ' + name + ' さんが退室しました');
+        // Defer 退室 toast by 10s: if the same name reconnects, the toast is
+        // suppressed and the入室 toast is suppressed too. Keeps the broadcaster
+        // from seeing rapid 入室/退室 flicker during network hiccups.
+        if(!S._pendingDeparts) S._pendingDeparts = new Map();
+        if(S._pendingDeparts.has(name)){
+          clearTimeout(S._pendingDeparts.get(name));
+        }
+        const timer = setTimeout(()=>{
+          if(S._pendingDeparts) S._pendingDeparts.delete(name);
+          toast('👁 ' + name + ' さんが退室しました');
+        }, 10000);
+        S._pendingDeparts.set(name, timer);
       }
     };
     conn.on('close', handleGone);
@@ -2337,6 +2364,7 @@ function broadcastState(){
 // PEERJS VIEWING
 // ============================================================
 let _reconnectAttempts = 0;
+let _lastReconnectAt = 0;
 function startPeerViewer(shortId){
   $('vRoomId').textContent = shortId;
   S.viewShortId = shortId;
@@ -2348,8 +2376,21 @@ function startPeerViewer(shortId){
   if(S.conn){ try{ S.conn.close(); }catch(e){} S.conn = null; }
   if(S.peer){ try{ S.peer.destroy(); }catch(e){} S.peer = null; }
   S.peer = new Peer({ debug: 1, config: ICE_CONFIG });
+  // Only call connectToHost on the FIRST 'open'. Subsequent 'open' events come
+  // from peer.reconnect() after a signaling-server hiccup — calling connectToHost
+  // again would tear down a healthy DataConnection and create a duplicate one,
+  // which is what causes the "rapid reconnect loop" the broadcaster sees as
+  // flickering 入室/退室 toasts.
+  let _initialOpen = false;
   S.peer.on('open', ()=>{
-    connectToHost(shortId);
+    if(!_initialOpen){
+      _initialOpen = true;
+      connectToHost(shortId);
+    } else if(!S.conn || !S.conn.open){
+      // Signaling came back AND the data conn is dead. Reconnect at the data layer.
+      connectToHost(shortId);
+    }
+    // else: signaling reconnected but the existing DataConnection is still alive — no-op.
   });
   S.peer.on('error', (err)=>{
     console.warn('viewer peer error', err);
@@ -2361,7 +2402,13 @@ function startPeerViewer(shortId){
     scheduleReconnect(shortId);
   });
   S.peer.on('disconnected', ()=>{
-    setVStatus('シグナリングサーバーから切断 - 再接続中...', 'disconnected');
+    // Don't show alarming toast for transient signaling hiccups when the data
+    // connection is still alive (which is the usual case).
+    if(S.conn && S.conn.open){
+      setVStatus('受信中（シグナリング再接続中...）', 'connected');
+    } else {
+      setVStatus('シグナリング再接続中...', 'disconnected');
+    }
     setTimeout(()=>{ try{ S.peer && !S.peer.destroyed && S.peer.reconnect(); }catch(e){} }, 1500);
   });
 }
@@ -2576,6 +2623,14 @@ function connectToHost(shortId){
   });
 }
 function scheduleReconnect(shortId){
+  const now = Date.now();
+  // Hard floor: never reschedule a reconnect within 800ms of the last one.
+  // This kills the runaway loop where multiple events (close + error + timeout)
+  // fire in rapid succession and each schedules its own reconnect.
+  if(now - _lastReconnectAt < 800){
+    return;
+  }
+  _lastReconnectAt = now;
   clearTimeout(S.reconnectTimer);
   // Exponential backoff: 3s → 4.5s → 6.75s … capped at 30s
   const delay = Math.min(30000, 3000 * Math.pow(1.5, _reconnectAttempts));
@@ -2830,20 +2885,21 @@ function init(){
 
   // Mode select buttons
   $('btnBroadcast').addEventListener('click', enterBroadcast);
-  $('btnView').addEventListener('click', ()=>{
+  function tryEnterView(){
     const v = $('joinId').value.trim().toUpperCase();
+    const n = ($('viewerNameInput').value || '').trim();
     if(!v){ $('joinId').focus(); toast('部屋IDを入力してください', true); return; }
+    if(!n){ $('viewerNameInput').focus(); toast('観戦者名を入力してください', true); return; }
+    S.viewerName = n.slice(0, 32);
+    saveSettings();
     enterView(v);
-  });
-  $('btnJoin').addEventListener('click', ()=>{
-    const v = $('joinId').value.trim().toUpperCase();
-    if(!v){ toast('部屋IDを入力してください', true); return; }
-    enterView(v);
-  });
+  }
+  $('btnView').addEventListener('click', tryEnterView);
+  $('btnJoin').addEventListener('click', tryEnterView);
   $('joinId').addEventListener('keydown', (e)=>{
     if(e.key === 'Enter'){
-      const v = $('joinId').value.trim().toUpperCase();
-      if(v) enterView(v);
+      tryEnterView();
+      return;
     }
   });
   // Viewer name input (mode-select screen)
@@ -3094,77 +3150,93 @@ function init(){
     updateRefBoardUI();
     toast('基準をクリア - 自動の局所基準で判定します');
   });
+  // Calibration uses a custom inline prompt (not native confirm()) because the
+  // native dialog freezes <video> rendering on iOS Safari — which is the root
+  // cause of the camera-freeze symptom right after recording calibration stones.
+  function showCalibPrompt(msg, onOk, onCancel){
+    const panel = $('calibPrompt');
+    if(!panel) return;
+    $('calibPromptMsg').innerHTML = msg;
+    panel.style.display = 'flex';
+    panel.scrollIntoView({behavior:'smooth', block:'center'});
+    const okBtn = $('calibPromptOk');
+    const cnBtn = $('calibPromptCancel');
+    const cleanup = ()=>{
+      panel.style.display = 'none';
+      okBtn.onclick = null;
+      cnBtn.onclick = null;
+    };
+    okBtn.onclick = ()=>{ cleanup(); if(onOk) onOk(); };
+    cnBtn.onclick = ()=>{ cleanup(); if(onCancel) onCancel(); };
+  }
   $('btnCalibStones').addEventListener('click', ()=>{
     const N = S.size;
     const sp = CORNER_STAR_POINTS[N];
     if(!sp){ toast(N+'路盤の星座標が未登録です', true); return; }
     if(!S._lastVs || S._lastVs.length !== N*N){ toast('まだ盤面が認識できていません', true); return; }
-    // Show guide on virtual board so user can see exactly where to place stones
+    // Step 1: scroll to the virtual board and show the markers.
     S.showCalibGuide = true;
     drawBoardCanvas('boardB');
     const ba = document.querySelector('.board-area');
-    if(ba) ba.scrollIntoView({behavior:'smooth', block:'nearest'});
-    const ok = confirm(
-      '【盤面正面（対局者目線）から見て — 撮影者目線ではありません】\n\n' +
-      '黒石と白石を以下の星に置いてから OK を押してください:\n\n' +
-      '●黒石 → 右上・右下 の星\n' +
-      '○白石 → 左上・左下 の星\n\n' +
-      '（合計4個。仮想盤に目印が表示されています）'
-    );
-    if(!ok){
-      S.showCalibGuide = false;
-      drawBoardCanvas('boardB');
-      return;
-    }
-    let bV = 0, wV = 0, bS = 0, wS = 0;
-    for(const [i,j] of sp.black){ bV += S._lastVs[i*N+j]; bS += S._lastSs[i*N+j]; }
-    for(const [i,j] of sp.white){ wV += S._lastVs[i*N+j]; wS += S._lastSs[i*N+j]; }
-    bV /= sp.black.length; bS /= sp.black.length;
-    wV /= sp.white.length; wS /= sp.white.length;
-    if(bV >= wV - 20){
-      S.showCalibGuide = false;
-      drawBoardCanvas('boardB');
-      toast('明るさの差が小さすぎます。黒白を逆に置いていませんか？', true);
-      return;
-    }
-    S.stoneCalib = { size: N, blackV: bV, whiteV: wV, blackS: bS, whiteS: wS, ts: Date.now() };
-    updateStoneCalibUI();
-    toast(`見本を記録（黒V=${bV.toFixed(0)} / 白V=${wV.toFixed(0)}）`);
-    // Second step — explicitly ask the user to remove the calibration stones
-    // and then reset the detection state so the board reflects the actual
-    // (now-empty) physical position. Without this, the 4 calibration stones
-    // stay committed until the hysteresis voting (90% strong vote) catches
-    // up — and if removing them produces too little motion to trigger the
-    // settle-snap, the cells can get stuck. Doing an explicit reset here
-    // makes the flow deterministic.
+    if(ba) ba.scrollIntoView({behavior:'smooth', block:'start'});
+    // Step 2: show inline OK/cancel below the board so the markers stay visible.
     setTimeout(()=>{
-      const ok2 = confirm(
-        '見本を記録しました。\n\n' +
-        '👉 盤面から 4 個の見本石を取り除いてから OK を押してください。\n\n' +
-        '（OK を押すと盤面をリセットして、今の状態（石を取り除いた状態）から認識を開始します）'
+      showCalibPrompt(
+        '仮想盤に表示された印の通りに石を置いてください<br>' +
+        '<span style="color:#fff;font-weight:400;font-size:.85rem">' +
+        '●黒石 → 右上・右下 の星<br>' +
+        '○白石 → 左上・左下 の星<br>' +
+        '<span style="color:#aaa;font-size:.78rem">（盤面正面＝対局者目線。撮影者目線ではありません）</span></span><br>' +
+        '置き終わったら下の OK を押してください',
+        ()=>{
+          let bV = 0, wV = 0, bS = 0, wS = 0;
+          for(const [i,j] of sp.black){ bV += S._lastVs[i*N+j]; bS += S._lastSs[i*N+j]; }
+          for(const [i,j] of sp.white){ wV += S._lastVs[i*N+j]; wS += S._lastSs[i*N+j]; }
+          bV /= sp.black.length; bS /= sp.black.length;
+          wV /= sp.white.length; wS /= sp.white.length;
+          if(bV >= wV - 20){
+            S.showCalibGuide = false;
+            drawBoardCanvas('boardB');
+            toast('明るさの差が小さすぎます。黒白を逆に置いていませんか？', true);
+            return;
+          }
+          S.stoneCalib = { size: N, blackV: bV, whiteV: wV, blackS: bS, whiteS: wS, ts: Date.now() };
+          updateStoneCalibUI();
+          toast(`見本を記録（黒V=${bV.toFixed(0)} / 白V=${wV.toFixed(0)}）`);
+          // Step 3: ask to remove stones, then snap the detection state.
+          showCalibPrompt(
+            '見本を記録しました<br>' +
+            '<span style="color:#fff;font-weight:400;font-size:.9rem">' +
+            '👉 盤面から 4 個の見本石を取り除いてから OK を押してください<br>' +
+            '<span style="color:#aaa;font-size:.78rem">（OK で盤面をリセットして、取り除いた状態から認識を開始します）</span></span>',
+            ()=>{
+              S.showCalibGuide = false;
+              initDetectionState();
+              S.gameStarted = false;
+              S.moves = [];
+              S.movesInitialized = false;
+              S.initialPosition = null;
+              $('moveCount').textContent = 0;
+              S.lastMotionTime = Date.now() - S.settleDelayMs - 200;
+              S._wasSettled = false;
+              updateGameStateUI();
+              drawBoardCanvas('boardB');
+              broadcastState();
+              toast('盤面をリセットしました（取り除いた状態から認識開始）');
+            },
+            ()=>{
+              S.showCalibGuide = false;
+              drawBoardCanvas('boardB');
+              toast('リセットせず校正のみ完了しました', true);
+            }
+          );
+        },
+        ()=>{
+          S.showCalibGuide = false;
+          drawBoardCanvas('boardB');
+        }
       );
-      S.showCalibGuide = false;
-      if(ok2){
-        initDetectionState();
-        S.gameStarted = false;
-        S.moves = [];
-        S.movesInitialized = false;
-        S.initialPosition = null;
-        $('moveCount').textContent = 0;
-        // Force a snap on the next valid frame: pretend motion just happened
-        // and settle period has already passed, so the next detectFrame will
-        // snap history & committed to the freshly-detected (empty) cls.
-        S.lastMotionTime = Date.now() - S.settleDelayMs - 200;
-        S._wasSettled = false;
-        updateGameStateUI();
-        drawBoardCanvas('boardB');
-        broadcastState();
-        toast('盤面をリセットしました（取り除いた状態から認識開始）');
-      } else {
-        drawBoardCanvas('boardB');
-        toast('リセットせず校正のみ完了しました', true);
-      }
-    }, 80);
+    }, 350);
   });
   $('btnClearCalib').addEventListener('click', ()=>{
     S.stoneCalib = null;
@@ -3397,11 +3469,15 @@ function init(){
   }
   requestAnimationFrame(ovLoop);
 
-  // Auto-enter viewer if URL contains ?view=
+  // Auto-fill viewer room ID from URL ?view=… but DON'T auto-enter — the user
+  // must still enter their name first, then press 参加.
   const params = new URLSearchParams(location.search);
   const v = params.get('view');
   if(v){
-    enterView(v.trim().toUpperCase());
+    $('joinId').value = v.trim().toUpperCase();
+    setTimeout(()=>{
+      if(!S.viewerName) $('viewerNameInput').focus();
+    }, 100);
   }
 }
 document.addEventListener('DOMContentLoaded', init);
