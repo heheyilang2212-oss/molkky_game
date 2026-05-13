@@ -186,6 +186,11 @@ a{color:#7cb7ff}
     <div class="cam-area" id="camArea">
       <video id="cam" autoplay playsinline muted></video>
       <canvas id="overlay"></canvas>
+      <div id="zoomControls" style="position:absolute;bottom:8px;right:8px;display:flex;flex-direction:column;align-items:center;gap:4px;z-index:10">
+        <button id="btnZoomIn" style="width:40px;height:40px;border-radius:50%;background:rgba(0,0,0,.72);color:#fff;border:1px solid rgba(255,255,255,.45);font-size:1.5rem;line-height:1;display:flex;align-items:center;justify-content:center">＋</button>
+        <button id="btnZoomOut" style="width:40px;height:40px;border-radius:50%;background:rgba(0,0,0,.72);color:#fff;border:1px solid rgba(255,255,255,.45);font-size:1.5rem;line-height:1;display:flex;align-items:center;justify-content:center">－</button>
+        <div id="zoomLabel" style="font-size:.65rem;color:#fff;text-align:center;text-shadow:0 1px 3px #000;background:rgba(0,0,0,.6);border-radius:4px;padding:1px 5px;min-width:32px">標準</div>
+      </div>
       <div class="camHint">
         <div id="camHintMsg">カメラを起動してください</div>
         <button id="camRetry">もう一度試す</button>
@@ -193,6 +198,29 @@ a{color:#7cb7ff}
     </div>
     <div class="board-area">
       <canvas id="boardB" width="500" height="500"></canvas>
+    </div>
+    <div id="cornerNudge" style="background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:8px">
+      <div style="font-size:.75rem;color:#8aa899;font-weight:700">🔧 角の微調整（ドラッグが難しいとき）</div>
+      <div style="display:flex;gap:5px">
+        <button class="nudgeCornerBtn" data-idx="0" style="flex:1;padding:6px 3px;border-radius:6px;border:1px solid rgba(244,208,63,.5);background:rgba(244,208,63,.2);color:#f4d03f;font-size:.75rem;font-weight:700">左上</button>
+        <button class="nudgeCornerBtn" data-idx="1" style="flex:1;padding:6px 3px;border-radius:6px;border:1px solid rgba(255,255,255,.15);background:rgba(255,255,255,.06);color:#ddd;font-size:.75rem">右上</button>
+        <button class="nudgeCornerBtn" data-idx="2" style="flex:1;padding:6px 3px;border-radius:6px;border:1px solid rgba(255,255,255,.15);background:rgba(255,255,255,.06);color:#ddd;font-size:.75rem">右下</button>
+        <button class="nudgeCornerBtn" data-idx="3" style="flex:1;padding:6px 3px;border-radius:6px;border:1px solid rgba(255,255,255,.15);background:rgba(255,255,255,.06);color:#ddd;font-size:.75rem">左下</button>
+      </div>
+      <div style="display:flex;align-items:center;justify-content:center;gap:14px">
+        <div style="display:grid;grid-template-columns:repeat(3,44px);grid-template-rows:repeat(3,44px);gap:3px">
+          <div></div>
+          <button id="nudgeUp" style="border-radius:8px;border:1px solid rgba(255,255,255,.15);background:rgba(255,255,255,.08);color:#bbb;font-size:1.3rem">↑</button>
+          <div></div>
+          <button id="nudgeLeft" style="border-radius:8px;border:1px solid rgba(255,255,255,.15);background:rgba(255,255,255,.08);color:#bbb;font-size:1.3rem">←</button>
+          <div id="nudgeCornerLabel" style="display:flex;align-items:center;justify-content:center;font-size:.65rem;color:#f4d03f;text-align:center;line-height:1.2;font-weight:700">左上</div>
+          <button id="nudgeRight" style="border-radius:8px;border:1px solid rgba(255,255,255,.15);background:rgba(255,255,255,.08);color:#bbb;font-size:1.3rem">→</button>
+          <div></div>
+          <button id="nudgeDown" style="border-radius:8px;border:1px solid rgba(255,255,255,.15);background:rgba(255,255,255,.08);color:#bbb;font-size:1.3rem">↓</button>
+          <div></div>
+        </div>
+        <div style="font-size:.72rem;color:#666;max-width:110px;line-height:1.5">選んだ角を1タップ3px移動。繰り返して微調整。</div>
+      </div>
     </div>
     <div class="share">
       <div class="row">
@@ -507,6 +535,7 @@ const S = {
   videoEl: null,
   cameras: [],
   selectedCamId: null,
+  zoomStep: 0,        // 0=widest, 1-10=progressively zoomed in
   // Loop
   loopHandle: null,
   lastProcTime: 0,
@@ -538,6 +567,8 @@ const S = {
   // Board display rotation (0-3, incremented CW by the rotate button).
   // Rotates the virtual board canvas so it matches the physical board orientation.
   boardRotation: 0,
+  // When true, drawBoardCanvas overlays a guide showing which stars to place calibration stones.
+  showCalibGuide: false,
   // Offscreen
   procCanvas: null,
   procCtx: null,
@@ -969,6 +1000,32 @@ function stopCamera(){
     S.stream = null;
   }
   if(S.videoEl) S.videoEl.srcObject = null;
+}
+async function applyZoom(delta){
+  const newStep = Math.max(0, Math.min(10, S.zoomStep + delta));
+  if(newStep === S.zoomStep) return;
+  S.zoomStep = newStep;
+  const label = $('zoomLabel');
+  if(label) label.textContent = newStep === 0 ? '標準' : '+' + newStep;
+  if(!S.stream) return;
+  const track = S.stream.getVideoTracks()[0];
+  if(!track) return;
+  try{
+    const caps = track.getCapabilities ? track.getCapabilities() : {};
+    if(caps.zoom && caps.zoom.max > caps.zoom.min){
+      const zMin = caps.zoom.min;
+      const zMax = caps.zoom.max;
+      const z = zMin + newStep * (zMax - zMin) / 10;
+      await track.applyConstraints({advanced:[{zoom: Math.round(z * 100) / 100}]});
+      return;
+    }
+  }catch(e){ console.warn('hardware zoom failed', e); }
+  // CSS transform fallback (display only; detection still reads the raw video frame)
+  if(S.videoEl){
+    const scale = 1 + newStep * 0.3;
+    S.videoEl.style.transform = scale > 1 ? `scale(${scale.toFixed(2)})` : '';
+    S.videoEl.style.transformOrigin = 'center center';
+  }
 }
 
 // ============================================================
@@ -1802,6 +1859,39 @@ function trackMoves(){
 }
 
 // ============================================================
+// CALIBRATION GUIDE OVERLAY (drawn inside board rotation context)
+// ============================================================
+function drawCalibGuide(ctx, N, W, margin, step){
+  const sp = CORNER_STAR_POINTS[N];
+  if(!sp) return;
+  const stoneR = step * 0.46;
+  function drawGuideStone(i, j, isBlack){
+    const x = margin + i*step;
+    const y = margin + j*step;
+    const pulse = 0.65 + 0.35 * Math.sin(Date.now() / 350);
+    ctx.beginPath();
+    ctx.arc(x, y, stoneR * 1.5, 0, Math.PI*2);
+    ctx.strokeStyle = isBlack ? `rgba(40,40,80,${pulse})` : `rgba(160,180,255,${pulse})`;
+    ctx.lineWidth = Math.max(2, step*0.12);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(x, y, stoneR, 0, Math.PI*2);
+    ctx.fillStyle = isBlack ? 'rgba(22,22,22,0.9)' : 'rgba(238,238,238,0.9)';
+    ctx.fill();
+    ctx.strokeStyle = isBlack ? 'rgba(255,255,255,0.22)' : 'rgba(0,0,0,0.25)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.fillStyle = isBlack ? '#eee' : '#222';
+    ctx.font = `bold ${Math.max(9, Math.round(step*0.36))}px sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(isBlack ? '●' : '○', x, y);
+  }
+  for(const [i,j] of sp.black) drawGuideStone(i, j, true);
+  for(const [i,j] of sp.white) drawGuideStone(i, j, false);
+}
+
+// ============================================================
 // BOARD RENDERING (Canvas, used by both broadcaster and viewer)
 // ============================================================
 function drawBoardCanvas(canvasId, override){
@@ -1943,7 +2033,30 @@ function drawBoardCanvas(canvasId, override){
       ctx.fill();
     }
   }
+  // Calibration guide: stone placement indicators (drawn inside rotation so positions are correct)
+  if(S.showCalibGuide && canvasId === 'boardB') drawCalibGuide(ctx, N, W, margin, step);
   ctx.restore(); // end board rotation
+  // Calibration guide instruction banner (outside rotation — always upright at bottom)
+  if(S.showCalibGuide && canvasId === 'boardB'){
+    const gfs = Math.max(10, Math.round(W * 0.034));
+    ctx.save();
+    const glines = ['【盤面正面（対局者目線）から見て】', '●黒 → 右上・右下 の星に置く', '○白 → 左上・左下 の星に置く'];
+    const glh = gfs * 1.6;
+    const gbh = glines.length * glh + 10;
+    const gbw = W * 0.84;
+    const gbx = (W - gbw) / 2;
+    const gby = W - gbh - 8;
+    ctx.fillStyle = 'rgba(8,14,8,0.90)';
+    ctx.fillRect(gbx, gby, gbw, gbh);
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    glines.forEach((line, ti)=>{
+      ctx.fillStyle = ti === 0 ? '#f4d03f' : ti === 1 ? '#aaa' : '#eee';
+      ctx.font = (ti === 0 ? '' : 'bold ') + gfs + 'px sans-serif';
+      ctx.fillText(line, W/2, gby + 5 + ti * glh);
+    });
+    ctx.restore();
+  }
   // "↑ 上" indicator — always upright at the visual top of the canvas
   {
     const indFs = Math.max(11, Math.round(W * 0.040));
@@ -2691,6 +2804,45 @@ function init(){
     try{ await startCamera(); resizeOverlay(); drawOverlay(); }
     catch(e){ toast('カメラ切替失敗: '+(e.message||e.name), true); }
   });
+  // Camera zoom buttons
+  $('btnZoomIn').addEventListener('click', ()=> applyZoom(1));
+  $('btnZoomOut').addEventListener('click', ()=> applyZoom(-1));
+  // Corner nudge panel
+  {
+    let _nudgeIdx = 0;
+    const NUDGE_PX = 3;
+    const CORNER_NAMES = ['左上','右上','右下','左下'];
+    function refreshNudgeSel(){
+      document.querySelectorAll('.nudgeCornerBtn').forEach(b=>{
+        const active = +b.dataset.idx === _nudgeIdx;
+        b.style.border = active ? '1px solid rgba(244,208,63,.5)' : '1px solid rgba(255,255,255,.15)';
+        b.style.background = active ? 'rgba(244,208,63,.2)' : 'rgba(255,255,255,.06)';
+        b.style.color = active ? '#f4d03f' : '#ddd';
+        b.style.fontWeight = active ? '700' : '';
+      });
+      const lbl = $('nudgeCornerLabel');
+      if(lbl) lbl.textContent = CORNER_NAMES[_nudgeIdx];
+    }
+    function doNudge(dx, dy){
+      ensureCorners();
+      const ov = $('overlay');
+      const r = ov ? ov.getBoundingClientRect() : {width:400, height:300};
+      const c = S.corners[_nudgeIdx];
+      S.corners[_nudgeIdx] = {
+        x: Math.max(0, Math.min(1, c.x + dx / r.width)),
+        y: Math.max(0, Math.min(1, c.y + dy / r.height)),
+      };
+      drawOverlay();
+      saveSettings();
+    }
+    document.querySelectorAll('.nudgeCornerBtn').forEach(btn=>{
+      btn.addEventListener('click', ()=>{ _nudgeIdx = +btn.dataset.idx; refreshNudgeSel(); });
+    });
+    $('nudgeUp').addEventListener('click',    ()=> doNudge(0, -NUDGE_PX));
+    $('nudgeDown').addEventListener('click',  ()=> doNudge(0,  NUDGE_PX));
+    $('nudgeLeft').addEventListener('click',  ()=> doNudge(-NUDGE_PX, 0));
+    $('nudgeRight').addEventListener('click', ()=> doNudge( NUDGE_PX, 0));
+  }
   document.querySelectorAll('.sizeBtns button').forEach(b=>{
     b.addEventListener('click', ()=>changeSize(+b.dataset.size));
   });
@@ -2891,19 +3043,31 @@ function init(){
     const sp = CORNER_STAR_POINTS[N];
     if(!sp){ toast(N+'路盤の星座標が未登録です', true); return; }
     if(!S._lastVs || S._lastVs.length !== N*N){ toast('まだ盤面が認識できていません', true); return; }
+    // Show guide on virtual board so user can see exactly where to place stones
+    S.showCalibGuide = true;
+    drawBoardCanvas('boardB');
+    const ba = document.querySelector('.board-area');
+    if(ba) ba.scrollIntoView({behavior:'smooth', block:'nearest'});
     const ok = confirm(
+      '【盤面正面（対局者目線）から見て — 撮影者目線ではありません】\n\n' +
       '黒石と白石を以下の星に置いてから OK を押してください:\n\n' +
-      '●黒石: 右上 / 右下 の星\n' +
-      '○白石: 左上 / 左下 の星\n\n' +
-      '（合計4個。星の真上に正確に置いてください）'
+      '●黒石 → 右上・右下 の星\n' +
+      '○白石 → 左上・左下 の星\n\n' +
+      '（合計4個。仮想盤に目印が表示されています）'
     );
-    if(!ok) return;
+    if(!ok){
+      S.showCalibGuide = false;
+      drawBoardCanvas('boardB');
+      return;
+    }
     let bV = 0, wV = 0, bS = 0, wS = 0;
     for(const [i,j] of sp.black){ bV += S._lastVs[i*N+j]; bS += S._lastSs[i*N+j]; }
     for(const [i,j] of sp.white){ wV += S._lastVs[i*N+j]; wS += S._lastSs[i*N+j]; }
     bV /= sp.black.length; bS /= sp.black.length;
     wV /= sp.white.length; wS /= sp.white.length;
     if(bV >= wV - 20){
+      S.showCalibGuide = false;
+      drawBoardCanvas('boardB');
       toast('明るさの差が小さすぎます。黒白を逆に置いていませんか？', true);
       return;
     }
@@ -2923,6 +3087,7 @@ function init(){
         '👉 盤面から 4 個の見本石を取り除いてから OK を押してください。\n\n' +
         '（OK を押すと盤面をリセットして、今の状態（石を取り除いた状態）から認識を開始します）'
       );
+      S.showCalibGuide = false;
       if(ok2){
         initDetectionState();
         S.gameStarted = false;
@@ -2940,6 +3105,7 @@ function init(){
         broadcastState();
         toast('盤面をリセットしました（取り除いた状態から認識開始）');
       } else {
+        drawBoardCanvas('boardB');
         toast('リセットせず校正のみ完了しました', true);
       }
     }, 80);
