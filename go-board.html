@@ -358,6 +358,7 @@ a{color:#7cb7ff}
       <canvas id="boardV" width="500" height="500"></canvas>
     </div>
     <div class="vStatus" id="vStatus">接続中...</div>
+    <button id="btnVReconnect" style="display:none;margin:6px auto 0;padding:8px 22px;border-radius:20px;border:1px solid rgba(244,208,63,.5);background:rgba(244,208,63,.18);color:#f4d03f;font-size:.82rem;font-weight:700">🔄 今すぐ再接続</button>
     <div style="display:flex;justify-content:center;align-items:center;gap:6px;font-size:.78rem;color:#aaa;margin:4px 0">
       <span>観戦者名</span>
       <input id="vNameEdit" maxlength="24" placeholder="(匿名)" style="flex:0 0 160px;padding:4px 8px;border-radius:6px;border:1px solid rgba(255,255,255,.18);background:rgba(0,0,0,.25);color:#fff">
@@ -460,6 +461,19 @@ const CORNER_STAR_POINTS = {
 const PROC_W = 640;          // downscaled processing width
 const PEER_PREFIX = 'goboard-';
 const STORAGE_KEY = 'goboard.settings.v1';
+// ICE servers: multiple STUN + public TURN relay so viewers behind strict NAT
+// (e.g. mobile carrier NAT) can still connect via relay when direct P2P fails.
+const ICE_CONFIG = {
+  iceServers: [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun1.l.google.com:19302' },
+    { urls: 'stun:stun2.l.google.com:19302' },
+    { urls: 'stun:stun.cloudflare.com:3478' },
+    { urls: 'turn:openrelay.metered.ca:80',       username: 'openrelayproject', credential: 'openrelayproject' },
+    { urls: 'turn:openrelay.metered.ca:443',      username: 'openrelayproject', credential: 'openrelayproject' },
+    { urls: 'turns:openrelay.metered.ca:443',     username: 'openrelayproject', credential: 'openrelayproject' },
+  ],
+};
 
 // ============================================================
 // STATE
@@ -555,6 +569,7 @@ const S = {
   conns: [],               // broadcaster: list of viewer DataConnections
   conn: null,              // viewer: connection to broadcaster
   reconnectTimer: null,
+  viewShortId: null,       // viewer: room ID currently being viewed (for manual reconnect)
   // UI
   draggingHandle: -1,
   _dragTrans: null,        // active translate-drag (square mode), holds last px point
@@ -2209,7 +2224,7 @@ function startPeerHost(forceNewId){
   }
   const id = PEER_PREFIX + shortId;
   setLiveBadge('connecting');
-  S.peer = new Peer(id, { debug: 1 });
+  S.peer = new Peer(id, { debug: 1, config: ICE_CONFIG });
   S.peer.on('open', (pid)=>{
     S.peerId = pid;
     const shortId = pid.replace(PEER_PREFIX, '');
@@ -2320,26 +2335,33 @@ function broadcastState(){
 // ============================================================
 // PEERJS VIEWING
 // ============================================================
+let _reconnectAttempts = 0;
 function startPeerViewer(shortId){
   $('vRoomId').textContent = shortId;
+  S.viewShortId = shortId;
   if(typeof Peer === 'undefined'){
     setVStatus('PeerJS が読み込めません。ネット接続を確認してください', 'disconnected');
     return;
   }
   setVStatus('接続中...', 'connecting');
+  if(S.conn){ try{ S.conn.close(); }catch(e){} S.conn = null; }
   if(S.peer){ try{ S.peer.destroy(); }catch(e){} S.peer = null; }
-  S.peer = new Peer({ debug: 1 });
+  S.peer = new Peer({ debug: 1, config: ICE_CONFIG });
   S.peer.on('open', ()=>{
     connectToHost(shortId);
   });
   S.peer.on('error', (err)=>{
     console.warn('viewer peer error', err);
-    setVStatus('接続エラー: ' + (err.type || err.message || ''), 'disconnected');
+    const msg = err.type === 'peer-unavailable' ? '配信者が見つかりません（部屋IDを確認してください）' :
+                err.type === 'network' ? 'ネットワークエラー' :
+                '接続エラー: ' + (err.type || err.message || '');
+    setVStatus(msg, 'disconnected');
+    showReconnectBtn(shortId);
     scheduleReconnect(shortId);
   });
   S.peer.on('disconnected', ()=>{
-    setVStatus('切断 - 再接続中...', 'disconnected');
-    try{ S.peer.reconnect(); }catch(e){}
+    setVStatus('シグナリングサーバーから切断 - 再接続中...', 'disconnected');
+    setTimeout(()=>{ try{ S.peer && !S.peer.destroyed && S.peer.reconnect(); }catch(e){} }, 1500);
   });
 }
 // Apply a sequence of moves to a starting board, following Go capture rules
@@ -2497,12 +2519,26 @@ function sendViewerHello(){
   catch(e){}
 }
 function connectToHost(shortId){
-  if(!S.peer) return;
+  if(!S.peer || S.peer.destroyed) return;
   const targetId = PEER_PREFIX + shortId;
-  setVStatus('接続中...', 'connecting');
+  setVStatus('接続中...（経路を探しています）', 'connecting');
+  if(S.conn){ try{ S.conn.close(); }catch(e){} S.conn = null; }
   const conn = S.peer.connect(targetId, { reliable: true });
   S.conn = conn;
+  // Timeout: if WebRTC ICE negotiation takes too long (e.g. strict NAT without TURN),
+  // conn.on('open') never fires. Detect and retry.
+  const connTimeout = setTimeout(()=>{
+    if(!conn.open){
+      setVStatus('接続タイムアウト（NAT越えに失敗の可能性）- 再試行します...', 'disconnected');
+      try{ conn.close(); }catch(e){}
+      showReconnectBtn(shortId);
+      scheduleReconnect(shortId);
+    }
+  }, 18000);
   conn.on('open', ()=>{
+    clearTimeout(connTimeout);
+    _reconnectAttempts = 0;
+    hideReconnectBtn();
     setVStatus('接続済み', 'connected');
     sendViewerHello();
   });
@@ -2526,19 +2562,38 @@ function connectToHost(shortId){
     }
   });
   conn.on('close', ()=>{
+    clearTimeout(connTimeout);
     setVStatus('切断されました - 再接続します...', 'disconnected');
+    showReconnectBtn(shortId);
     scheduleReconnect(shortId);
   });
   conn.on('error', (e)=>{
+    clearTimeout(connTimeout);
     setVStatus('接続エラー - 再接続します...', 'disconnected');
+    showReconnectBtn(shortId);
     scheduleReconnect(shortId);
   });
 }
 function scheduleReconnect(shortId){
   clearTimeout(S.reconnectTimer);
+  // Exponential backoff: 3s → 4.5s → 6.75s … capped at 30s
+  const delay = Math.min(30000, 3000 * Math.pow(1.5, _reconnectAttempts));
+  _reconnectAttempts++;
+  const sec = Math.round(delay / 1000);
+  setVStatus(`切断 - ${sec}秒後に自動再接続（試行 ${_reconnectAttempts} 回目）`, 'disconnected');
   S.reconnectTimer = setTimeout(()=>{
     if(S.mode === 'view') startPeerViewer(shortId);
-  }, 3000);
+  }, delay);
+}
+function showReconnectBtn(shortId){
+  let btn = $('btnVReconnect');
+  if(!btn) return;
+  btn.style.display = '';
+  btn.onclick = ()=>{ _reconnectAttempts = 0; clearTimeout(S.reconnectTimer); startPeerViewer(shortId); };
+}
+function hideReconnectBtn(){
+  const btn = $('btnVReconnect');
+  if(btn) btn.style.display = 'none';
 }
 function setVStatus(text, cls){
   const el = $('vStatus');
