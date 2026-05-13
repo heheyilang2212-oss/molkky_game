@@ -2908,15 +2908,41 @@ function init(){
       return;
     }
     S.stoneCalib = { size: N, blackV: bV, whiteV: wV, blackS: bS, whiteS: wS, ts: Date.now() };
-    initDetectionState();
-    S.gameStarted = false;
-    S.moves = [];
-    S.movesInitialized = false;
-    S.initialPosition = null;
-    $('moveCount').textContent = 0;
-    updateGameStateUI();
     updateStoneCalibUI();
-    toast(`黒白の見本を記録（黒V=${bV.toFixed(0)} / 白V=${wV.toFixed(0)}）`);
+    toast(`見本を記録（黒V=${bV.toFixed(0)} / 白V=${wV.toFixed(0)}）`);
+    // Second step — explicitly ask the user to remove the calibration stones
+    // and then reset the detection state so the board reflects the actual
+    // (now-empty) physical position. Without this, the 4 calibration stones
+    // stay committed until the hysteresis voting (90% strong vote) catches
+    // up — and if removing them produces too little motion to trigger the
+    // settle-snap, the cells can get stuck. Doing an explicit reset here
+    // makes the flow deterministic.
+    setTimeout(()=>{
+      const ok2 = confirm(
+        '見本を記録しました。\n\n' +
+        '👉 盤面から 4 個の見本石を取り除いてから OK を押してください。\n\n' +
+        '（OK を押すと盤面をリセットして、今の状態（石を取り除いた状態）から認識を開始します）'
+      );
+      if(ok2){
+        initDetectionState();
+        S.gameStarted = false;
+        S.moves = [];
+        S.movesInitialized = false;
+        S.initialPosition = null;
+        $('moveCount').textContent = 0;
+        // Force a snap on the next valid frame: pretend motion just happened
+        // and settle period has already passed, so the next detectFrame will
+        // snap history & committed to the freshly-detected (empty) cls.
+        S.lastMotionTime = Date.now() - S.settleDelayMs - 200;
+        S._wasSettled = false;
+        updateGameStateUI();
+        drawBoardCanvas('boardB');
+        broadcastState();
+        toast('盤面をリセットしました（取り除いた状態から認識開始）');
+      } else {
+        toast('リセットせず校正のみ完了しました', true);
+      }
+    }, 80);
   });
   $('btnClearCalib').addEventListener('click', ()=>{
     S.stoneCalib = null;
