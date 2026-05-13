@@ -266,6 +266,9 @@ a{color:#7cb7ff}
         <div class="sRow">
           <div class="togRow"><input type="checkbox" id="showMoveNum"> <label for="showMoveNum">直近の手数を盤上に表示</label></div>
         </div>
+        <div class="sRow">
+          <button id="btnShowTut" style="width:100%;padding:7px;border-radius:6px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.15);color:#bbb;font-size:.78rem">📋 はじめ方ガイドを再表示</button>
+        </div>
       </div>
     </details>
     <div class="statusBar">
@@ -293,8 +296,8 @@ a{color:#7cb7ff}
       <button id="btnCalibStones" title="●黒を右上・右下の星、○白を左上・左下の星に置いてからこのボタン">🎯 黒白の見本を記録（4つの星に置く）</button>
       <button id="btnClearCalib" style="display:none">見本をクリア</button>
       <button id="btnReset">隅をリセット</button>
-      <button id="btnRotate">盤を90°回転</button>
-      <button id="btnFlipTrap" style="display:none" title="台形の上下を入れ替え（遠近反転）">▼▲ 上下を反転</button>
+      <button id="btnRotate" title="盤の左上→右上→右下→左下の割り当てを時計回りにずらします">↻ 盤を時計回りに90°回転</button>
+      <button id="btnFlipTrap" style="display:none" title="カメラの上下を入れ替えます（横撮り時に遠い辺と近い辺が逆のとき使用）">↕ 上下を反転（遠近入替）</button>
       <button id="btnRecalib">再キャリブレ</button>
       <button id="btnPng">盤面をPNG保存</button>
       <button id="btnUndo">最終手を取消</button>
@@ -366,6 +369,46 @@ a{color:#7cb7ff}
 </section>
 
 <div id="toast"></div>
+
+<!-- ============================================================
+     TUTORIAL MODAL (shown on first broadcast open)
+     ============================================================ -->
+<div id="tutModal" style="display:none;position:fixed;inset:0;z-index:900;background:rgba(0,0,0,.82);align-items:center;justify-content:center;padding:16px">
+  <div style="background:#1a1f1a;border:1px solid rgba(244,208,63,.35);border-radius:16px;max-width:420px;width:100%;padding:20px 22px;color:#e8e8ea;font-size:.88rem;line-height:1.6">
+    <h2 style="color:#f4d03f;font-size:1.1rem;margin-bottom:14px;letter-spacing:1px">📋 はじめにやること</h2>
+    <ol style="padding-left:1.4em;display:flex;flex-direction:column;gap:10px">
+      <li>
+        <b>ハンドルを碁盤の四隅に合わせる</b><br>
+        <span style="color:#aaa">黄色い丸①②③④を、碁盤の<br>
+        　① 左上の角交点<br>
+        　② 右上の角交点<br>
+        　③ 右下の角交点<br>
+        　④ 左下の角交点<br>
+        にそれぞれドラッグして合わせてください。</span>
+      </li>
+      <li>
+        <b>路盤サイズを選ぶ</b><br>
+        <span style="color:#aaa">画面上部の「9・13・19」ボタンで使用する碁盤のサイズを選択してください。</span>
+      </li>
+      <li>
+        <b>方向がずれているときは「↻ 時計回りに90°回転」</b><br>
+        <span style="color:#aaa">石の位置がずれて表示される場合、回転ボタンを押して向きを調整してください。横撮りの場合は「校正モード：台形」を試してください。</span>
+      </li>
+      <li>
+        <b>「▶ 開始」で着手のカウントを開始</b><br>
+        <span style="color:#aaa">石を置いても開始前はカウントされません。対局を始めるタイミングで「▶ 開始」を押してください。</span>
+      </li>
+      <li>
+        <b>部屋IDまたはURLを観戦者に共有</b><br>
+        <span style="color:#aaa">「部屋ID」欄のIDかURLをコピーして、観戦者に伝えてください。</span>
+      </li>
+    </ol>
+    <div style="margin-top:18px;text-align:center">
+      <button id="tutClose" style="padding:10px 36px;border-radius:30px;background:linear-gradient(135deg,#f4d03f,#e6b800);color:#1a1a1a;font-weight:700;border:none;font-size:.95rem;cursor:pointer">わかった、始める ▶</button>
+    </div>
+    <p style="font-size:.7rem;color:#555;text-align:center;margin-top:10px">次回からはこの案内は表示されません（設定→ヘルプから再表示可）</p>
+  </div>
+</div>
 
 <script src="https://unpkg.com/peerjs@1.5.5/dist/peerjs.min.js" integrity="sha384-x0YgkOr/3UOZP2CRDxGW9e0Q+2Qjyr3uJrm4xU32Y7ZCNAo7Cc7bjhrZMi/dwczu" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 <script>
@@ -1038,7 +1081,11 @@ function drawOverlay(){
     ctx.stroke();
     ctx.setLineDash([]);
   }
-  // Handles
+  // Handles with corner labels (盤の向き: corners[0]=左上, [1]=右上, [2]=右下, [3]=左下)
+  const CORNER_LABEL = ['左上','右上','右下','左下'];
+  // Label offset directions: push label away from center of quad
+  const cx4 = (pts[0].x+pts[1].x+pts[2].x+pts[3].x)/4;
+  const cy4 = (pts[0].y+pts[1].y+pts[2].y+pts[3].y)/4;
   for(let i=0;i<4;i++){
     const p = pts[i];
     ctx.beginPath();
@@ -1053,6 +1100,17 @@ function drawOverlay(){
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText((i+1).toString(), p.x, p.y);
+    // Corner label outside the handle
+    const dx = p.x - cx4, dy = p.y - cy4;
+    const len = Math.sqrt(dx*dx + dy*dy) || 1;
+    const lx = p.x + (dx/len) * (HANDLE_R + 14);
+    const ly = p.y + (dy/len) * (HANDLE_R + 14);
+    ctx.font = 'bold 11px sans-serif';
+    ctx.fillStyle = 'rgba(255,240,100,0.95)';
+    ctx.strokeStyle = 'rgba(0,0,0,0.7)';
+    ctx.lineWidth = 3;
+    ctx.strokeText(CORNER_LABEL[i], lx, ly);
+    ctx.fillText(CORNER_LABEL[i], lx, ly);
   }
 
   // Freeze-state banner (visible while motion is detected or the settle countdown is running)
@@ -2420,9 +2478,8 @@ async function enterBroadcast(){
     startProcessingLoop();
     startPeerHost();
     if(!localStorage.getItem('goboard.tutDone')){
-      setTimeout(()=>toast('① 黄色いハンドルを碁盤の四隅(交点)に合わせる ② 設定でしきい値を調整'), 600);
-      setTimeout(()=>toast('③ 部屋IDかURLを共有 ④ 観戦側はURLを開くだけ'), 4200);
-      localStorage.setItem('goboard.tutDone', '1');
+      const tm = $('tutModal');
+      if(tm){ tm.style.display = 'flex'; }
     }
     // Offer to resume the previous game (if recent and has moves)
     const saved = loadGameSnapshot();
@@ -2634,7 +2691,7 @@ function init(){
     flipTrapezoidVertical();
     saveSettings();
     drawOverlay();
-    toast('台形を上下反転しました');
+    toast('↕ 上下反転しました（遠近入替）');
   });
   $('autoTurn').addEventListener('change', e=>{ S.autoTurn = e.target.checked; saveSettings(); });
   $('trackMoves').addEventListener('change', e=>{ S.trackMoves = e.target.checked; saveSettings(); });
@@ -2705,7 +2762,7 @@ function init(){
     updateStoneCalibUI();
     saveSettings();
     drawOverlay();
-    toast('盤を90°回転しました');
+    toast('↻ 時計回りに90°回転しました（左上→右上→右下→左下）');
   });
   $('btnStart').addEventListener('click', ()=>{
     if(!S.committed){ toast('まだ盤面が認識されていません', true); return; }
@@ -2952,6 +3009,16 @@ function init(){
   }
   $('vChatSend').addEventListener('click', sendVChat);
   $('vChatInput').addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); sendVChat(); } });
+  // Tutorial modal close
+  $('tutClose').addEventListener('click', ()=>{
+    const tm = $('tutModal');
+    if(tm) tm.style.display = 'none';
+    localStorage.setItem('goboard.tutDone', '1');
+  });
+  $('btnShowTut').addEventListener('click', ()=>{
+    const tm = $('tutModal');
+    if(tm) tm.style.display = 'flex';
+  });
   // Broadcaster: toggle viewer list
   $('btnViewerList').addEventListener('click', ()=>{
     const list = $('viewerList');
