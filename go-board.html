@@ -230,6 +230,14 @@ a{color:#7cb7ff}
         <button id="calibPromptCancel" style="padding:10px 22px;border-radius:8px;border:1px solid rgba(255,255,255,.25);background:rgba(255,255,255,.06);color:#ddd;font-size:.9rem;min-width:100px">キャンセル</button>
       </div>
     </div>
+    <div id="resignPanel" style="display:none;background:rgba(255,80,80,.1);border:2px solid rgba(255,100,100,.45);border-radius:10px;padding:14px;flex-direction:column;gap:10px">
+      <div style="color:#ff7070;font-weight:700;text-align:center;font-size:.95rem">どちらが投了しますか？</div>
+      <div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap">
+        <button id="resignBlackBtn" style="padding:9px 20px;border-radius:8px;border:none;background:#222;color:#fff;font-weight:700;font-size:.9rem">⬛ 黒が投了</button>
+        <button id="resignWhiteBtn" style="padding:9px 20px;border-radius:8px;border:none;background:#eee;color:#222;font-weight:700;font-size:.9rem">⬜ 白が投了</button>
+        <button id="resignCancelBtn" style="padding:9px 16px;border-radius:8px;border:1px solid rgba(255,255,255,.25);background:rgba(255,255,255,.06);color:#ddd;font-size:.88rem">キャンセル</button>
+      </div>
+    </div>
     <div class="share">
       <div class="row">
         <span class="lbl">部屋ID</span>
@@ -2750,24 +2758,26 @@ async function enterBroadcast(){
         `${saved.blackName||'(黒)'} vs ${saved.whiteName||'(白)'}` +
         (saved.gameName ? `\n対局名: ${saved.gameName}` : '');
       setTimeout(()=>{
-        if(confirm(desc)) {
-          if(restoreFromSnapshot(saved)) toast('前回の対局を復元しました');
-        } else {
-          if(confirm('前回の対局を破棄しますか？')){
-            // Archive before discarding so user can still recover the SGF
-            try{
-              const list = JSON.parse(localStorage.getItem(ARCHIVED_GAMES_KEY) || '[]');
-              const sgf = buildSGFFrom(saved.size, saved.initialPosition, saved.committed, saved.moves, saved.turn, {
-                blackName: saved.blackName, whiteName: saved.whiteName, gameName: saved.gameName,
-                komi: saved.komi, handicap: saved.handicap, result: saved.result,
-              });
-              list.unshift({ ts: saved.ts, moves: saved.moves.length, result: saved.result, blackName: saved.blackName, whiteName: saved.whiteName, gameName: saved.gameName, sgf });
-              while(list.length > 20) list.pop();
-              localStorage.setItem(ARCHIVED_GAMES_KEY, JSON.stringify(list));
-            }catch(e){}
-            clearGameSnapshot();
-          }
-        }
+        showCalibPrompt(
+          desc.replace(/\n/g, '<br>'),
+          ()=>{ if(restoreFromSnapshot(saved)) toast('前回の対局を復元しました'); },
+          ()=>{
+            showCalibPrompt('前回の対局を破棄しますか？', ()=>{
+              try{
+                const list = JSON.parse(localStorage.getItem(ARCHIVED_GAMES_KEY) || '[]');
+                const sgf = buildSGFFrom(saved.size, saved.initialPosition, saved.committed, saved.moves, saved.turn, {
+                  blackName: saved.blackName, whiteName: saved.whiteName, gameName: saved.gameName,
+                  komi: saved.komi, handicap: saved.handicap, result: saved.result,
+                });
+                list.unshift({ ts: saved.ts, moves: saved.moves.length, result: saved.result, blackName: saved.blackName, whiteName: saved.whiteName, gameName: saved.gameName, sgf });
+                while(list.length > 20) list.pop();
+                localStorage.setItem(ARCHIVED_GAMES_KEY, JSON.stringify(list));
+              }catch(e){}
+              clearGameSnapshot();
+            }, null, '破棄する');
+          },
+          '復元する'
+        );
       }, 800);
     }
   } catch(e){
@@ -3083,24 +3093,25 @@ function init(){
   });
   $('btnRestart').addEventListener('click', ()=>{
     if(!S.committed){ toast('まだ盤面が認識されていません', true); return; }
-    if(!confirm('現在の手数をリセットして、いまの盤面を1手目の前として始め直しますか？')) return;
-    // Archive the previous game before resetting
-    archiveCurrentGame();
-    S.initialPosition = snapshotCommitted();
-    syncPrevToCommitted();
-    S.movesInitialized = true;
-    S.moves = [];
-    S.suspiciousFrames = 0;
-    S.gameStarted = true;
-    S.result = '';
-    $('result').value = '';
-    S._gameStartedTs = Date.now();
-    $('moveCount').textContent = 0;
-    updateGameStateUI();
-    drawBoardCanvas('boardB');
-    broadcastState();
-    saveGameSnapshot();
-    toast('初期状態に戻しました（1手目から）');
+    showCalibPrompt('現在の手数をリセットして、<br>いまの盤面を1手目の前として始め直しますか？', ()=>{
+      // Archive the previous game before resetting
+      archiveCurrentGame();
+      S.initialPosition = snapshotCommitted();
+      syncPrevToCommitted();
+      S.movesInitialized = true;
+      S.moves = [];
+      S.suspiciousFrames = 0;
+      S.gameStarted = true;
+      S.result = '';
+      $('result').value = '';
+      S._gameStartedTs = Date.now();
+      $('moveCount').textContent = 0;
+      updateGameStateUI();
+      drawBoardCanvas('boardB');
+      broadcastState();
+      saveGameSnapshot();
+      toast('初期状態に戻しました（1手目から）');
+    });
   });
   $('btnRecalib').addEventListener('click', ()=>{
     initDetectionState();
@@ -3121,22 +3132,31 @@ function init(){
     if(!S.committed){ toast('まだ盤面が認識されていません', true); return; }
     let stoneCount = 0;
     for(const row of S.committed) for(const c of row) if(c !== '.') stoneCount++;
-    if(stoneCount > 0 && !confirm(`現在 ${stoneCount} 個の石が認識されています。盤面を空にしてから押してください。それでも記録しますか？`)) return;
-    S.refBoard = {
-      size: S.size,
-      V: new Float32Array(S._lastVs),
-      S: new Float32Array(S._lastSs),
-      ts: Date.now(),
+    const doCapture = ()=>{
+      S.refBoard = {
+        size: S.size,
+        V: new Float32Array(S._lastVs),
+        S: new Float32Array(S._lastSs),
+        ts: Date.now(),
+      };
+      initDetectionState();
+      S.gameStarted = false;
+      S.moves = [];
+      S.movesInitialized = false;
+      S.initialPosition = null;
+      $('moveCount').textContent = 0;
+      updateGameStateUI();
+      updateRefBoardUI();
+      toast('空の盤面を記録しました - これを基準に判定します');
     };
-    initDetectionState();
-    S.gameStarted = false;
-    S.moves = [];
-    S.movesInitialized = false;
-    S.initialPosition = null;
-    $('moveCount').textContent = 0;
-    updateGameStateUI();
-    updateRefBoardUI();
-    toast('空の盤面を記録しました - これを基準に判定します');
+    if(stoneCount > 0){
+      showCalibPrompt(
+        `現在 ${stoneCount} 個の石が認識されています。<br>盤面を空にしてから押すことをおすすめします。<br>それでも記録しますか？`,
+        doCapture, null, '記録する'
+      );
+    } else {
+      doCapture();
+    }
   });
   $('btnClearRef').addEventListener('click', ()=>{
     S.refBoard = null;
@@ -3150,13 +3170,13 @@ function init(){
     updateRefBoardUI();
     toast('基準をクリア - 自動の局所基準で判定します');
   });
-  // Calibration uses a custom inline prompt (not native confirm()) because the
-  // native dialog freezes <video> rendering on iOS Safari — which is the root
-  // cause of the camera-freeze symptom right after recording calibration stones.
-  function showCalibPrompt(msg, onOk, onCancel){
+  // All inline dialogs below replace native confirm()/prompt() because those
+  // freeze <video> rendering on iOS Safari.
+  function showCalibPrompt(msg, onOk, onCancel, okLabel){
     const panel = $('calibPrompt');
     if(!panel) return;
     $('calibPromptMsg').innerHTML = msg;
+    $('calibPromptOk').textContent = okLabel || 'OK';
     panel.style.display = 'flex';
     panel.scrollIntoView({behavior:'smooth', block:'center'});
     const okBtn = $('calibPromptOk');
@@ -3168,6 +3188,22 @@ function init(){
     };
     okBtn.onclick = ()=>{ cleanup(); if(onOk) onOk(); };
     cnBtn.onclick = ()=>{ cleanup(); if(onCancel) onCancel(); };
+  }
+  function showResignPanel(onBlack, onWhite, onCancel){
+    const panel = $('resignPanel');
+    if(!panel) return;
+    panel.style.display = 'flex';
+    panel.scrollIntoView({behavior:'smooth', block:'center'});
+    const bBtn = $('resignBlackBtn');
+    const wBtn = $('resignWhiteBtn');
+    const cBtn = $('resignCancelBtn');
+    const cleanup = ()=>{
+      panel.style.display = 'none';
+      bBtn.onclick = null; wBtn.onclick = null; cBtn.onclick = null;
+    };
+    bBtn.onclick = ()=>{ cleanup(); if(onBlack) onBlack(); };
+    wBtn.onclick = ()=>{ cleanup(); if(onWhite) onWhite(); };
+    cBtn.onclick = ()=>{ cleanup(); if(onCancel) onCancel(); };
   }
   $('btnCalibStones').addEventListener('click', ()=>{
     const N = S.size;
@@ -3296,22 +3332,21 @@ function init(){
   });
   $('btnResign').addEventListener('click', ()=>{
     if(!S.gameStarted){ toast('まず「開始」を押してください', true); return; }
-    const loser = S.turn || 'B';  // whoever is to move resigns
-    const winner = loser === 'B' ? 'W' : 'B';
-    const which = prompt(
-      '投了するのはどちら？ B = 黒、W = 白 を入力してください。\n' +
-      '（既定は手番側 ' + (loser==='B'?'黒':'白') + ' が投了 → ' + (winner==='B'?'B+R':'W+R') + '）',
-      loser
+    showResignPanel(
+      ()=>{
+        S.result = 'W+R';
+        $('result').value = S.result;
+        broadcastState(); saveGameSnapshot();
+        toast('白の勝ち（W+R）');
+      },
+      ()=>{
+        S.result = 'B+R';
+        $('result').value = S.result;
+        broadcastState(); saveGameSnapshot();
+        toast('黒の勝ち（B+R）');
+      },
+      null
     );
-    if(which == null) return;
-    const v = which.trim().toUpperCase();
-    if(v !== 'B' && v !== 'W'){ toast('B か W を入力してください', true); return; }
-    const won = v === 'B' ? 'W' : 'B';
-    S.result = won + '+R';
-    $('result').value = S.result;
-    broadcastState();
-    saveGameSnapshot();
-    toast((won==='B'?'黒':'白') + 'の勝ち（' + S.result + '）');
   });
   $('copyId').addEventListener('click', async ()=>{
     const v = $('roomId').textContent;
