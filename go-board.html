@@ -4,6 +4,11 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0,user-scalable=no">
 <meta name="theme-color" content="#1a1a1a">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="碁盤中継">
+<link rel="manifest" href="go-board-manifest.webmanifest">
+<link rel="apple-touch-icon" href="data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20180%20180%22%3E%3Crect%20width%3D%22180%22%20height%3D%22180%22%20rx%3D%2228%22%20fill%3D%22%23d4a55a%22%2F%3E%3Cg%20stroke%3D%22%231a1208%22%20stroke-width%3D%222%22%20fill%3D%22none%22%3E%3Cpath%20d%3D%22M30%2030h120M30%2060h120M30%2090h120M30%20120h120M30%20150h120M30%2030v120M60%2030v120M90%2030v120M120%2030v120M150%2030v120%22%2F%3E%3C%2Fg%3E%3Ccircle%20cx%3D%2260%22%20cy%3D%2260%22%20r%3D%2212%22%20fill%3D%22%23111%22%2F%3E%3Ccircle%20cx%3D%22120%22%20cy%3D%22120%22%20r%3D%2212%22%20fill%3D%22%23fff%22%20stroke%3D%22%23999%22%2F%3E%3C%2Fsvg%3E">
 <title>碁盤カメラ中継</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
@@ -155,6 +160,9 @@ a{color:#7cb7ff}
     <input id="joinId" placeholder="部屋IDを入力" maxlength="16" autocomplete="off">
     <button id="btnJoin">参加</button>
   </div>
+  <div class="joinRow" style="margin-top:6px">
+    <input id="viewerNameInput" placeholder="観戦者名（任意・配信側に表示されます）" maxlength="24" autocomplete="off">
+  </div>
   <div class="info">配信側が表示する部屋IDを入力するか、配信側が共有したURLを開いてください。</div>
   <div class="err" id="modeErr"></div>
 </section>
@@ -199,10 +207,14 @@ a{color:#7cb7ff}
         <span class="val url" id="viewUrl">--</span>
         <button id="copyUrl">コピー</button>
       </div>
-      <div class="row">
-        <span class="lbl">視聴者</span>
-        <span class="val" id="viewerCount">0</span>
-        <span style="color:#666;font-size:.72rem">名接続中</span>
+      <div class="row" style="flex-direction:column;align-items:stretch;gap:4px">
+        <div style="display:flex;align-items:center;gap:8px">
+          <span class="lbl">視聴者</span>
+          <span class="val" id="viewerCount">0</span>
+          <span style="color:#666;font-size:.72rem">名接続中</span>
+          <button id="btnViewerList" style="margin-left:auto;font-size:.72rem;padding:2px 8px;border-radius:10px;border:1px solid rgba(255,255,255,.2);background:rgba(255,255,255,.06);color:#fff">▽ 名前一覧</button>
+        </div>
+        <div id="viewerList" style="display:none;font-size:.78rem;color:#ddd;background:rgba(0,0,0,.25);border-radius:6px;padding:6px 8px;max-height:140px;overflow-y:auto"></div>
       </div>
     </div>
     <details class="settings">
@@ -231,7 +243,13 @@ a{color:#7cb7ff}
           <input type="range" id="settleDelay" min="0" max="50" step="1" value="20">
         </div>
         <div class="sRow">
-          <div class="togRow"><input type="checkbox" id="squareMode"> <label for="squareMode">正方形固定モード（角=サイズ、中=移動）</label></div>
+          <div class="sHead">校正モード</div>
+          <select id="calibMode" style="width:100%;padding:6px 8px;border-radius:6px;background:rgba(0,0,0,.3);color:#fff;border:1px solid rgba(255,255,255,.18)">
+            <option value="free">自由配置（4隅を独立に動かす）</option>
+            <option value="square">正方形固定（真上撮影：角=サイズ、中=移動）</option>
+            <option value="trapezoid">左右対称の台形（横撮影：上下の幅を独立調整、上下反転可）</option>
+          </select>
+          <div id="calibModeHint" style="font-size:.7rem;color:#aaa;margin-top:4px"></div>
         </div>
         <div class="sRow">
           <div class="togRow"><input type="checkbox" id="dbgOverlay"> <label for="dbgOverlay">認識結果をカメラに重ねて表示</label></div>
@@ -248,6 +266,9 @@ a{color:#7cb7ff}
         <div class="sRow">
           <div class="togRow"><input type="checkbox" id="showMoveNum"> <label for="showMoveNum">直近の手数を盤上に表示</label></div>
         </div>
+        <div class="sRow">
+          <button id="btnShowTut" style="width:100%;padding:7px;border-radius:6px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.15);color:#bbb;font-size:.78rem">📋 はじめ方ガイドを再表示</button>
+        </div>
       </div>
     </details>
     <div class="statusBar">
@@ -263,6 +284,9 @@ a{color:#7cb7ff}
       <label style="display:flex;align-items:center;gap:6px">●黒<input id="blackName" type="text" maxlength="40" placeholder="黒番の名前" style="width:140px;padding:4px 8px;border-radius:6px;border:1px solid rgba(255,255,255,.18);background:rgba(0,0,0,.25);color:#fff"></label>
       <label style="display:flex;align-items:center;gap:6px">○白<input id="whiteName" type="text" maxlength="40" placeholder="白番の名前" style="width:140px;padding:4px 8px;border-radius:6px;border:1px solid rgba(255,255,255,.18);background:rgba(0,0,0,.25);color:#fff"></label>
       <label style="display:flex;align-items:center;gap:6px">対局名<input id="gameName" type="text" maxlength="80" placeholder="(任意)" style="width:160px;padding:4px 8px;border-radius:6px;border:1px solid rgba(255,255,255,.18);background:rgba(0,0,0,.25);color:#fff"></label>
+      <label style="display:flex;align-items:center;gap:6px">コミ<input id="komi" type="number" step="0.5" min="-100" max="100" style="width:60px;padding:4px 6px;border-radius:6px;border:1px solid rgba(255,255,255,.18);background:rgba(0,0,0,.25);color:#fff"></label>
+      <label style="display:flex;align-items:center;gap:6px">置石<input id="handicap" type="number" min="0" max="9" style="width:50px;padding:4px 6px;border-radius:6px;border:1px solid rgba(255,255,255,.18);background:rgba(0,0,0,.25);color:#fff"></label>
+      <label style="display:flex;align-items:center;gap:6px">結果<input id="result" type="text" maxlength="20" placeholder="例: B+5.5 / W+R" style="width:120px;padding:4px 8px;border-radius:6px;border:1px solid rgba(255,255,255,.18);background:rgba(0,0,0,.25);color:#fff"></label>
     </div>
     <div class="actions">
       <button class="primary full" id="btnStart">▶ 開始（カウント開始）</button>
@@ -272,12 +296,23 @@ a{color:#7cb7ff}
       <button id="btnCalibStones" title="●黒を右上・右下の星、○白を左上・左下の星に置いてからこのボタン">🎯 黒白の見本を記録（4つの星に置く）</button>
       <button id="btnClearCalib" style="display:none">見本をクリア</button>
       <button id="btnReset">隅をリセット</button>
-      <button id="btnRotate">盤を90°回転</button>
+      <button id="btnRotate" title="盤の左上→右上→右下→左下の割り当てを時計回りにずらします">↻ 盤を時計回りに90°回転</button>
+      <button id="btnFlipTrap" style="display:none" title="カメラの上下を入れ替えます（横撮り時に遠い辺と近い辺が逆のとき使用）">↕ 上下を反転（遠近入替）</button>
       <button id="btnRecalib">再キャリブレ</button>
       <button id="btnPng">盤面をPNG保存</button>
       <button id="btnUndo">最終手を取消</button>
+      <button id="btnPass">パス</button>
+      <button id="btnResign">投了</button>
       <button class="primary full" id="btnSGF">SGFをダウンロード</button>
     </div>
+    <details class="settings" style="margin-top:8px">
+      <summary>💬 チャット <span id="bChatCount" style="color:#888;font-size:.72rem">(0)</span></summary>
+      <div id="bChatBox" style="background:rgba(0,0,0,.25);border-radius:8px;padding:8px;max-height:200px;overflow-y:auto;font-size:.82rem;line-height:1.5"></div>
+      <div style="display:flex;gap:6px;margin-top:6px">
+        <input id="bChatInput" type="text" maxlength="200" placeholder="観戦者にメッセージ..." style="flex:1;padding:6px 10px;border-radius:6px;border:1px solid rgba(255,255,255,.18);background:rgba(0,0,0,.25);color:#fff">
+        <button id="bChatSend" style="padding:6px 14px;border-radius:6px;background:rgba(244,208,63,.2);color:#f4d03f;border:1px solid rgba(244,208,63,.4)">送信</button>
+      </div>
+    </details>
   </div>
 </section>
 
@@ -295,6 +330,10 @@ a{color:#7cb7ff}
       <canvas id="boardV" width="500" height="500"></canvas>
     </div>
     <div class="vStatus" id="vStatus">接続中...</div>
+    <div style="display:flex;justify-content:center;align-items:center;gap:6px;font-size:.78rem;color:#aaa;margin:4px 0">
+      <span>観戦者名</span>
+      <input id="vNameEdit" maxlength="24" placeholder="(匿名)" style="flex:0 0 160px;padding:4px 8px;border-radius:6px;border:1px solid rgba(255,255,255,.18);background:rgba(0,0,0,.25);color:#fff">
+    </div>
     <div id="vPlayers" style="display:none;font-size:.85rem;color:#f4d03f;text-align:center;margin:4px 0;line-height:1.4"></div>
     <div class="vMeta">
       <span>黒 <b id="vBCount">0</b></span>
@@ -318,12 +357,60 @@ a{color:#7cb7ff}
       <button id="vNumBtn" style="padding:6px 14px;border-radius:18px;border:1px solid rgba(255,255,255,.2);background:rgba(255,255,255,.06);color:#fff;font-size:.78rem">手番表示 オフ</button>
       <button id="vSgfBtn" style="padding:6px 14px;border-radius:18px;border:1px solid rgba(244,208,63,.5);background:rgba(244,208,63,.15);color:#f4d03f;font-size:.78rem">SGFダウンロード</button>
     </div>
+    <details style="margin:10px auto 0;max-width:520px;width:90%">
+      <summary style="cursor:pointer;color:#ddd">💬 チャット <span id="vChatCount" style="color:#888;font-size:.72rem">(0)</span></summary>
+      <div id="vChatBox" style="background:rgba(0,0,0,.25);border-radius:8px;padding:8px;max-height:200px;overflow-y:auto;font-size:.82rem;line-height:1.5;margin-top:6px"></div>
+      <div style="display:flex;gap:6px;margin-top:6px">
+        <input id="vChatInput" type="text" maxlength="200" placeholder="メッセージ..." style="flex:1;padding:6px 10px;border-radius:6px;border:1px solid rgba(255,255,255,.18);background:rgba(0,0,0,.25);color:#fff">
+        <button id="vChatSend" style="padding:6px 14px;border-radius:6px;background:rgba(244,208,63,.2);color:#f4d03f;border:1px solid rgba(244,208,63,.4)">送信</button>
+      </div>
+    </details>
   </div>
 </section>
 
 <div id="toast"></div>
 
-<script src="https://unpkg.com/peerjs@1.5.5/dist/peerjs.min.js"></script>
+<!-- ============================================================
+     TUTORIAL MODAL (shown on first broadcast open)
+     ============================================================ -->
+<div id="tutModal" style="display:none;position:fixed;inset:0;z-index:900;background:rgba(0,0,0,.82);align-items:center;justify-content:center;padding:16px">
+  <div style="background:#1a1f1a;border:1px solid rgba(244,208,63,.35);border-radius:16px;max-width:420px;width:100%;padding:20px 22px;color:#e8e8ea;font-size:.88rem;line-height:1.6">
+    <h2 style="color:#f4d03f;font-size:1.1rem;margin-bottom:14px;letter-spacing:1px">📋 はじめにやること</h2>
+    <ol style="padding-left:1.4em;display:flex;flex-direction:column;gap:10px">
+      <li>
+        <b>ハンドルを碁盤の四隅に合わせる</b><br>
+        <span style="color:#aaa">黄色い丸①②③④を、碁盤の<br>
+        　① 左上の角交点<br>
+        　② 右上の角交点<br>
+        　③ 右下の角交点<br>
+        　④ 左下の角交点<br>
+        にそれぞれドラッグして合わせてください。</span>
+      </li>
+      <li>
+        <b>路盤サイズを選ぶ</b><br>
+        <span style="color:#aaa">画面上部の「9・13・19」ボタンで使用する碁盤のサイズを選択してください。</span>
+      </li>
+      <li>
+        <b>方向がずれているときは「↻ 時計回りに90°回転」</b><br>
+        <span style="color:#aaa">石の位置がずれて表示される場合、回転ボタンを押して向きを調整してください。横撮りの場合は「校正モード：台形」を試してください。</span>
+      </li>
+      <li>
+        <b>「▶ 開始」で着手のカウントを開始</b><br>
+        <span style="color:#aaa">石を置いても開始前はカウントされません。対局を始めるタイミングで「▶ 開始」を押してください。</span>
+      </li>
+      <li>
+        <b>部屋IDまたはURLを観戦者に共有</b><br>
+        <span style="color:#aaa">「部屋ID」欄のIDかURLをコピーして、観戦者に伝えてください。</span>
+      </li>
+    </ol>
+    <div style="margin-top:18px;text-align:center">
+      <button id="tutClose" style="padding:10px 36px;border-radius:30px;background:linear-gradient(135deg,#f4d03f,#e6b800);color:#1a1a1a;font-weight:700;border:none;font-size:.95rem;cursor:pointer">OK</button>
+    </div>
+    <p style="font-size:.7rem;color:#555;text-align:center;margin-top:10px">次回からはこの案内は表示されません（設定→ヘルプから再表示可）</p>
+  </div>
+</div>
+
+<script src="https://unpkg.com/peerjs@1.5.5/dist/peerjs.min.js" integrity="sha384-x0YgkOr/3UOZP2CRDxGW9e0Q+2Qjyr3uJrm4xU32Y7ZCNAo7Cc7bjhrZMi/dwczu" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 <script>
 'use strict';
 
@@ -381,6 +468,19 @@ const S = {
   blackName: '',
   whiteName: '',
   gameName: '',
+  // Match-level meta written into SGF (KM, HA, RE).
+  komi: 6.5,
+  handicap: 0,
+  result: '',
+  // Viewer-side display name. Saved in localStorage; sent to the broadcaster
+  // via a 'hello' DataConnection message so the broadcaster can list who is
+  // watching.
+  viewerName: '',
+  // Broadcaster-side: per-connection metadata (display name etc.) keyed by
+  // PeerJS DataConnection object. Not persisted.
+  connInfo: null,
+  // Chat messages — kept in-memory, capped at 100, format {name, text, ts, mine}
+  chat: [],
   // Empty-board reference: per-cell V/S captured when the board is empty.
   // When set, classification uses this as the baseline instead of the running
   // row/column median, which dramatically reduces false positives caused by
@@ -429,10 +529,12 @@ const S = {
   // UI
   draggingHandle: -1,
   _dragTrans: null,        // active translate-drag (square mode), holds last px point
-  // Calibration mode: when true, all four corners are constrained to form an
-  // axis-aligned square. Useful for top-down phone shots where perspective is
-  // negligible, so the user only adjusts size and position.
-  squareMode: false,
+  // Calibration mode:
+  //  'free'      = each corner moves independently (default; for any angle).
+  //  'square'    = axis-aligned square (top-down shots; tweak size + position).
+  //  'trapezoid' = left/right symmetric trapezoid (for side-on shots where the
+  //                far edge looks shorter than the near edge).
+  calibMode: 'free',
   // Offscreen
   procCanvas: null,
   procCtx: null,
@@ -459,6 +561,149 @@ function clamp(v,a,b){return v<a?a:v>b?b:v}
 function escapeHtml(s){
   return String(s).replace(/[&<>"']/g, c=>({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
 }
+// ============================================================
+// CHAT
+// ============================================================
+function appendChat(msg){
+  if(!S.chat) S.chat = [];
+  S.chat.push(msg);
+  while(S.chat.length > 100) S.chat.shift();
+  renderChat();
+}
+function renderChat(){
+  const lists = ['bChatBox', 'vChatBox'];
+  for(const id of lists){
+    const el = document.getElementById(id);
+    if(!el) continue;
+    el.innerHTML = (S.chat || []).map(m => {
+      const t = new Date(m.ts || Date.now()).toLocaleTimeString().slice(0,5);
+      const nm = escapeHtml(m.name || '(匿名)');
+      const tx = escapeHtml(m.text || '');
+      const color = m.mine ? '#7cffa7' : '#f4d03f';
+      return `<div><span style="color:${color}">${nm}</span> <span style="color:#666">${t}</span><br><span style="color:#eee">${tx}</span></div>`;
+    }).join('');
+    el.scrollTop = el.scrollHeight;
+  }
+  const cnt = (S.chat || []).length;
+  if($('bChatCount')) $('bChatCount').textContent = '(' + cnt + ')';
+  if($('vChatCount')) $('vChatCount').textContent = '(' + cnt + ')';
+}
+function broadcasterSendChat(text){
+  const msg = { type: 'chat', name: (S.gameName || 'ホスト') || 'ホスト', text: text, ts: Date.now() };
+  appendChat({ name: msg.name, text: msg.text, ts: msg.ts, mine: true });
+  for(const c of (S.conns || [])){
+    try{ c.send(msg); }catch(e){}
+  }
+}
+function broadcasterRelayChat(from, msg){
+  // Echo to other viewers + append locally
+  const out = { type: 'chat', name: msg.name || '(匿名)', text: msg.text, ts: msg.ts || Date.now() };
+  appendChat({ name: out.name, text: out.text, ts: out.ts, mine: false });
+  for(const c of (S.conns || [])){
+    if(c === from) continue;
+    try{ c.send(out); }catch(e){}
+  }
+}
+function viewerSendChat(text){
+  if(!S.conn || !S.conn.open) { toast('未接続です', true); return; }
+  const msg = { type: 'chat', name: (S.viewerName || '').trim() || '(匿名)', text: text, ts: Date.now() };
+  appendChat({ name: msg.name, text: msg.text, ts: msg.ts, mine: true });
+  try{ S.conn.send(msg); }catch(e){}
+}
+// ============================================================
+// GAME AUTO-SAVE / RESTORE
+// ============================================================
+const SAVED_GAME_KEY = 'goboard.savedGame.v1';
+const ARCHIVED_GAMES_KEY = 'goboard.archivedGames.v1';
+function saveGameSnapshot(){
+  if(!S.gameStarted) return;
+  if(!S.movesInitialized) return;
+  try{
+    const snap = {
+      v: 1,
+      size: S.size,
+      initialPosition: S.initialPosition,
+      committed: S.committed,
+      moves: S.moves,
+      blackName: S.blackName, whiteName: S.whiteName, gameName: S.gameName,
+      komi: S.komi, handicap: S.handicap, result: S.result,
+      turn: S.turn,
+      startedTs: S._gameStartedTs || Date.now(),
+      ts: Date.now(),
+    };
+    localStorage.setItem(SAVED_GAME_KEY, JSON.stringify(snap));
+  }catch(e){ console.warn('saveGameSnapshot failed', e); }
+}
+function loadGameSnapshot(){
+  try{
+    const raw = localStorage.getItem(SAVED_GAME_KEY);
+    if(!raw) return null;
+    const j = JSON.parse(raw);
+    if(!j || j.v !== 1) return null;
+    return j;
+  }catch(e){ return null; }
+}
+function clearGameSnapshot(){
+  try{ localStorage.removeItem(SAVED_GAME_KEY); }catch(e){}
+}
+function archiveCurrentGame(){
+  if(!S.gameStarted || !S.moves || !S.moves.length) return;
+  try{
+    const meta = {
+      blackName: S.blackName, whiteName: S.whiteName, gameName: S.gameName,
+      komi: S.komi, handicap: S.handicap, result: S.result,
+    };
+    const sgf = buildSGFFrom(S.size, S.initialPosition, S.committed, S.moves, S.turn, meta);
+    const list = JSON.parse(localStorage.getItem(ARCHIVED_GAMES_KEY) || '[]');
+    list.unshift({
+      ts: Date.now(),
+      moves: S.moves.length,
+      result: S.result,
+      blackName: S.blackName, whiteName: S.whiteName, gameName: S.gameName,
+      sgf,
+    });
+    // Cap at 20 archived games
+    while(list.length > 20) list.pop();
+    localStorage.setItem(ARCHIVED_GAMES_KEY, JSON.stringify(list));
+  }catch(e){ console.warn('archive failed', e); }
+}
+function restoreFromSnapshot(snap){
+  if(!snap || snap.v !== 1) return false;
+  S.size = snap.size;
+  setActiveSize(S.size);
+  initDetectionState();
+  S.initialPosition = snap.initialPosition;
+  // Snapshot the committed state from the saved game so future detections
+  // diff against it (rather than the freshly-detected empty board).
+  for(let i=0;i<S.size;i++) for(let j=0;j<S.size;j++){
+    S.committed[i][j] = (snap.committed && snap.committed[i] && snap.committed[i][j]) || '.';
+    S.prevCommitted[i][j] = S.committed[i][j];
+    S.history[i][j] = Array.from({length: S.histDepth}, ()=>S.committed[i][j]);
+  }
+  S.moves = (snap.moves || []).slice();
+  S.movesInitialized = true;
+  S.gameStarted = true;
+  S.blackName = snap.blackName || '';
+  S.whiteName = snap.whiteName || '';
+  S.gameName = snap.gameName || '';
+  S.komi = (typeof snap.komi === 'number') ? snap.komi : 6.5;
+  S.handicap = snap.handicap || 0;
+  S.result = snap.result || '';
+  S.turn = snap.turn || 'B';
+  S._gameStartedTs = snap.startedTs || Date.now();
+  $('blackName').value = S.blackName;
+  $('whiteName').value = S.whiteName;
+  $('gameName').value = S.gameName;
+  $('komi').value = S.komi;
+  $('handicap').value = S.handicap;
+  $('result').value = S.result;
+  $('moveCount').textContent = S.moves.length;
+  updateGameStateUI();
+  drawBoardCanvas('boardB');
+  drawOverlay();
+  broadcastState();
+  return true;
+}
 function updateRefBoardUI(){
   const cap = document.getElementById('btnCaptureRef');
   const clr = document.getElementById('btnClearRef');
@@ -476,6 +721,40 @@ function updateRefBoardUI(){
     cap.style.borderColor = '';
     clr.style.display = 'none';
   }
+}
+function updateViewerListUI(){
+  const cnt = document.getElementById('viewerCount');
+  const list = document.getElementById('viewerList');
+  if(!cnt) return;
+  cnt.textContent = S.conns.length;
+  if(!list) return;
+  if(!S.conns.length){
+    list.innerHTML = '<em style="color:#888">まだ誰も観戦していません</em>';
+    return;
+  }
+  const items = S.conns.map(c => {
+    const meta = S.connInfo && S.connInfo.get(c);
+    const nm = (meta && meta.name && meta.name.trim()) || '(匿名)';
+    return '<div>・' + escapeHtml(nm) + '</div>';
+  }).join('');
+  list.innerHTML = items;
+}
+function getViewerName(conn){
+  const meta = S.connInfo && S.connInfo.get(conn);
+  return (meta && meta.name && meta.name.trim()) || '(匿名)';
+}
+function updateCalibModeUI(){
+  const sel = document.getElementById('calibMode');
+  const hint = document.getElementById('calibModeHint');
+  const flip = document.getElementById('btnFlipTrap');
+  if(!sel) return;
+  sel.value = S.calibMode;
+  if(hint){
+    if(S.calibMode === 'square') hint.textContent = '真上から撮るとき向け。角でサイズ、中をドラッグで全体を移動。';
+    else if(S.calibMode === 'trapezoid') hint.textContent = '横から撮るとき向け。上下それぞれの幅を独立に調整できます。「▼▲ 上下を反転」で遠い辺と近い辺を入れ替え。';
+    else hint.textContent = '4隅を独立に動かせるモード（既定）。';
+  }
+  if(flip) flip.style.display = (S.calibMode === 'trapezoid') ? '' : 'none';
 }
 function updateStoneCalibUI(){
   const cap = document.getElementById('btnCalibStones');
@@ -535,10 +814,14 @@ function loadSettings(){
     if(typeof j.trackMoves === 'boolean') S.trackMoves = j.trackMoves;
     if(typeof j.soundOn === 'boolean') S.soundOn = j.soundOn;
     if(typeof j.showMoveNum === 'boolean') S.showMoveNum = j.showMoveNum;
-    if(typeof j.squareMode === 'boolean') S.squareMode = j.squareMode;
+    if(typeof j.calibMode === 'string' && ['free','square','trapezoid'].includes(j.calibMode)) S.calibMode = j.calibMode;
+    else if(j.squareMode === true) S.calibMode = 'square';  // migrate
     if(typeof j.blackName === 'string') S.blackName = j.blackName;
     if(typeof j.whiteName === 'string') S.whiteName = j.whiteName;
     if(typeof j.gameName === 'string') S.gameName = j.gameName;
+    if(typeof j.viewerName === 'string') S.viewerName = j.viewerName;
+    if(typeof j.komi === 'number') S.komi = j.komi;
+    if(typeof j.handicap === 'number') S.handicap = j.handicap;
     if(j.selectedCamId) S.selectedCamId = j.selectedCamId;
   }catch(e){}
 }
@@ -557,10 +840,13 @@ function saveSettings(){
       trackMoves: S.trackMoves,
       soundOn: S.soundOn,
       showMoveNum: S.showMoveNum,
-      squareMode: S.squareMode,
+      calibMode: S.calibMode,
       blackName: S.blackName,
       whiteName: S.whiteName,
       gameName: S.gameName,
+      viewerName: S.viewerName,
+      komi: S.komi,
+      handicap: S.handicap,
       selectedCamId: S.selectedCamId,
     }));
   }catch(e){}
@@ -795,7 +1081,11 @@ function drawOverlay(){
     ctx.stroke();
     ctx.setLineDash([]);
   }
-  // Handles
+  // Handles with corner labels (盤の向き: corners[0]=左上, [1]=右上, [2]=右下, [3]=左下)
+  const CORNER_LABEL = ['左上','右上','右下','左下'];
+  // Label offset directions: push label away from center of quad
+  const cx4 = (pts[0].x+pts[1].x+pts[2].x+pts[3].x)/4;
+  const cy4 = (pts[0].y+pts[1].y+pts[2].y+pts[3].y)/4;
   for(let i=0;i<4;i++){
     const p = pts[i];
     ctx.beginPath();
@@ -810,6 +1100,17 @@ function drawOverlay(){
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText((i+1).toString(), p.x, p.y);
+    // Corner label outside the handle
+    const dx = p.x - cx4, dy = p.y - cy4;
+    const len = Math.sqrt(dx*dx + dy*dy) || 1;
+    const lx = p.x + (dx/len) * (HANDLE_R + 14);
+    const ly = p.y + (dy/len) * (HANDLE_R + 14);
+    ctx.font = 'bold 11px sans-serif';
+    ctx.fillStyle = 'rgba(255,240,100,0.95)';
+    ctx.strokeStyle = 'rgba(0,0,0,0.7)';
+    ctx.lineWidth = 3;
+    ctx.strokeText(CORNER_LABEL[i], lx, ly);
+    ctx.fillText(CORNER_LABEL[i], lx, ly);
   }
 
   // Freeze-state banner (visible while motion is detected or the settle countdown is running)
@@ -907,8 +1208,8 @@ function squareTranslate(dxPx, dyPx){
   const cs = S.corners.map(normToOverlay);
   setCornersFromPx(cs.map(p => ({ x: p.x + dxPx, y: p.y + dyPx })));
 }
-// Hit test: is (x, y) inside the current quad's bounding box (used by square
-// mode to start a translate drag)?
+// Hit test: is (x, y) inside the current quad's bounding box (used by square /
+// trapezoid modes to start a translate drag)?
 function isInsideQuadBox(x, y){
   const cs = S.corners.map(normToOverlay);
   let minX=Infinity, minY=Infinity, maxX=-Infinity, maxY=-Infinity;
@@ -919,6 +1220,80 @@ function isInsideQuadBox(x, y){
     if(p.y>maxY) maxY=p.y;
   }
   return x >= minX && x <= maxX && y >= minY && y <= maxY;
+}
+// ============================================================
+// TRAPEZOID MODE (left/right symmetric, for side-on shots)
+// ============================================================
+// Convention: corners[0]=TL, [1]=TR, [2]=BR, [3]=BL. The trapezoid is symmetric
+// about a vertical axis x=cx. TL/TR share Y, BL/BR share Y, and
+// (TL.x + TR.x)/2 == (BL.x + BR.x)/2 == cx.
+function fitTrapezoidToCorners(){
+  if(!S.corners) ensureCorners();
+  const cs = S.corners.map(normToOverlay);
+  // Pair top and bottom by Y; smaller two Ys = top edge.
+  const idxByY = [0,1,2,3].sort((a,b)=>cs[a].y - cs[b].y);
+  const topIdx = [idxByY[0], idxByY[1]];
+  const botIdx = [idxByY[2], idxByY[3]];
+  const topY = (cs[topIdx[0]].y + cs[topIdx[1]].y) / 2;
+  const botY = (cs[botIdx[0]].y + cs[botIdx[1]].y) / 2;
+  const topL = Math.min(cs[topIdx[0]].x, cs[topIdx[1]].x);
+  const topR = Math.max(cs[topIdx[0]].x, cs[topIdx[1]].x);
+  const botL = Math.min(cs[botIdx[0]].x, cs[botIdx[1]].x);
+  const botR = Math.max(cs[botIdx[0]].x, cs[botIdx[1]].x);
+  const cx = ((topL + topR) / 2 + (botL + botR) / 2) / 2;
+  const topHW = Math.max(20, (topR - topL) / 2);
+  const botHW = Math.max(20, (botR - botL) / 2);
+  setCornersFromPx([
+    { x: cx - topHW, y: topY },  // TL
+    { x: cx + topHW, y: topY },  // TR
+    { x: cx + botHW, y: botY },  // BR
+    { x: cx - botHW, y: botY },  // BL
+  ]);
+}
+// Drag a corner in trapezoid mode: the partner corner on the same edge
+// mirrors automatically, and the cx axis stays fixed.
+function trapezoidDragCorner(idx, dragPx){
+  const cs = S.corners.map(normToOverlay);
+  const cx = ((cs[0].x + cs[1].x) / 2 + (cs[2].x + cs[3].x) / 2) / 2;
+  const topY = (cs[0].y + cs[1].y) / 2;
+  const botY = (cs[2].y + cs[3].y) / 2;
+  const onTop = (idx === 0 || idx === 1);
+  const onRight = (idx === 1 || idx === 2);
+  // Clamp so the corner stays on the correct side of the axis with some
+  // minimum half-width, and the top edge stays above the bottom edge.
+  const minHW = 14;
+  const minGap = 14;
+  let x = dragPx.x;
+  let y = dragPx.y;
+  if(onRight) x = Math.max(x, cx + minHW);
+  else        x = Math.min(x, cx - minHW);
+  if(onTop) y = Math.min(y, botY - minGap);
+  else      y = Math.max(y, topY + minGap);
+  const next = cs.slice();
+  const mirrorX = 2 * cx - x;
+  if(idx === 0){ next[0] = {x, y}; next[1] = {x: mirrorX, y}; }
+  else if(idx === 1){ next[1] = {x, y}; next[0] = {x: mirrorX, y}; }
+  else if(idx === 2){ next[2] = {x, y}; next[3] = {x: mirrorX, y}; }
+  else if(idx === 3){ next[3] = {x, y}; next[2] = {x: mirrorX, y}; }
+  setCornersFromPx(next);
+}
+function trapezoidTranslate(dxPx, dyPx){
+  const cs = S.corners.map(normToOverlay);
+  setCornersFromPx(cs.map(p => ({ x: p.x + dxPx, y: p.y + dyPx })));
+}
+// Vertically flip the trapezoid (swap top edge with bottom edge). Lets users
+// pick which physical board edge corresponds to the top of the screen when
+// shooting from the side.
+function flipTrapezoidVertical(){
+  if(!S.corners) return;
+  const cs = S.corners.map(normToOverlay);
+  // Compute bounding y, then mirror each y about its centre.
+  let minY = Infinity, maxY = -Infinity;
+  for(const p of cs){ if(p.y<minY) minY=p.y; if(p.y>maxY) maxY=p.y; }
+  const my = (minY + maxY) / 2;
+  // Also swap TL↔BL and TR↔BR so corner labels follow the flip.
+  const flipped = cs.map(p => ({ x: p.x, y: 2*my - p.y }));
+  setCornersFromPx([flipped[3], flipped[2], flipped[1], flipped[0]]);
 }
 
 function attachOverlayInput(){
@@ -940,7 +1315,7 @@ function attachOverlayInput(){
       e.preventDefault();
       return;
     }
-    if(S.squareMode && isInsideQuadBox(p.x, p.y)){
+    if((S.calibMode === 'square' || S.calibMode === 'trapezoid') && isInsideQuadBox(p.x, p.y)){
       S._dragTrans = { last: p };
       ov.setPointerCapture(e.pointerId);
       e.preventDefault();
@@ -949,8 +1324,10 @@ function attachOverlayInput(){
   ov.addEventListener('pointermove', e=>{
     const p = evtPos(e);
     if(S.draggingHandle >= 0){
-      if(S.squareMode){
+      if(S.calibMode === 'square'){
         squareDragResize(S.draggingHandle, p);
+      } else if(S.calibMode === 'trapezoid'){
+        trapezoidDragCorner(S.draggingHandle, p);
       } else {
         S.corners[S.draggingHandle] = overlayToNorm(p.x, p.y);
       }
@@ -962,7 +1339,8 @@ function attachOverlayInput(){
       const dx = p.x - S._dragTrans.last.x;
       const dy = p.y - S._dragTrans.last.y;
       S._dragTrans.last = p;
-      squareTranslate(dx, dy);
+      if(S.calibMode === 'trapezoid') trapezoidTranslate(dx, dy);
+      else squareTranslate(dx, dy);
       drawOverlay();
       e.preventDefault();
     }
@@ -1415,6 +1793,7 @@ function trackMoves(){
   $('moveCount').textContent = S.moves.length;
   S.lastMoveTime = ts;
   playStoneClick();
+  saveGameSnapshot();
 }
 
 // ============================================================
@@ -1605,6 +1984,9 @@ function buildSGFFrom(N, initialBoard, currentBoard, moves, turn, meta){
     if(meta.gameName) body += `GN[${sgfText(meta.gameName)}]`;
     if(meta.blackName) body += `PB[${sgfText(meta.blackName)}]`;
     if(meta.whiteName) body += `PW[${sgfText(meta.whiteName)}]`;
+    if(typeof meta.komi === 'number' && !isNaN(meta.komi)) body += `KM[${meta.komi}]`;
+    if(typeof meta.handicap === 'number' && meta.handicap > 0) body += `HA[${meta.handicap|0}]`;
+    if(meta.result) body += `RE[${sgfText(meta.result)}]`;
   }
   const initial = initialBoard || currentBoard;
   if(initial){
@@ -1618,7 +2000,10 @@ function buildSGFFrom(N, initialBoard, currentBoard, moves, turn, meta){
   }
   if(moves && moves.length){
     body += '\n';
-    for(const m of moves) body += `;${m.c}[${sgfCoord(m.x, m.y)}]`;
+    for(const m of moves){
+      const isPass = (m.x == null || m.y == null);
+      body += `;${m.c}[${isPass ? '' : sgfCoord(m.x, m.y)}]`;
+    }
   } else if(turn){
     body += `\nPL[${turn}]`;
   }
@@ -1639,7 +2024,10 @@ function generateSGF(){
   const N = S.size;
   const initial = (S.trackMoves && S.movesInitialized && S.initialPosition) ? S.initialPosition : null;
   const moves = S.trackMoves ? S.moves : null;
-  const meta = { blackName: S.blackName, whiteName: S.whiteName, gameName: S.gameName };
+  const meta = {
+    blackName: S.blackName, whiteName: S.whiteName, gameName: S.gameName,
+    komi: S.komi, handicap: S.handicap, result: S.result,
+  };
   const text = buildSGFFrom(N, initial, S.committed, moves, S.turn, meta);
   downloadSGF(text, 'goboard');
   toast('SGF をダウンロードしました');
@@ -1688,18 +2076,50 @@ function startPeerHost(forceNewId){
   S.peer.on('connection', (conn)=>{
     conn.on('open', ()=>{
       S.conns.push(conn);
-      $('viewerCount').textContent = S.conns.length;
+      if(!S.connInfo) S.connInfo = new Map();
+      S.connInfo.set(conn, { name: '', announced: false });
+      updateViewerListUI();
       // Send initial snapshot
       sendStateTo(conn);
     });
-    conn.on('close', ()=>{
-      S.conns = S.conns.filter(c=>c!==conn);
-      $('viewerCount').textContent = S.conns.length;
+    conn.on('data', (data)=>{
+      if(!data || !data.type) return;
+      if(data.type === 'hello'){
+        if(!S.connInfo) S.connInfo = new Map();
+        const meta = S.connInfo.get(conn) || { name: '', announced: false };
+        const raw = (typeof data.name === 'string') ? data.name.trim().slice(0, 32) : '';
+        const newName = raw || '(匿名)';
+        const isFirstHello = !meta.announced;
+        const isNameChange = meta.announced && meta.name !== newName;
+        meta.name = newName;
+        meta.announced = true;
+        S.connInfo.set(conn, meta);
+        updateViewerListUI();
+        if(isFirstHello){
+          toast('👁 ' + newName + ' さんが入室しました');
+        } else if(isNameChange){
+          toast('👁 ' + newName + ' に名前変更');
+        }
+      } else if(data.type === 'chat'){
+        const text = (typeof data.text === 'string') ? data.text.slice(0, 300) : '';
+        if(!text) return;
+        const meta = S.connInfo && S.connInfo.get(conn);
+        const name = (data.name && data.name.trim()) || (meta && meta.name) || '(匿名)';
+        broadcasterRelayChat(conn, { name, text, ts: data.ts || Date.now() });
+      }
     });
-    conn.on('error', ()=>{
+    const handleGone = ()=>{
+      const meta = S.connInfo && S.connInfo.get(conn);
+      const name = (meta && meta.name) || '(匿名)';
+      if(S.connInfo) S.connInfo.delete(conn);
       S.conns = S.conns.filter(c=>c!==conn);
-      $('viewerCount').textContent = S.conns.length;
-    });
+      updateViewerListUI();
+      if(meta && meta.announced){
+        toast('👁 ' + name + ' さんが退室しました');
+      }
+    };
+    conn.on('close', handleGone);
+    conn.on('error', handleGone);
   });
   S.peer.on('disconnected', ()=>{
     setLiveBadge('再接続中');
@@ -1730,6 +2150,9 @@ function snapshotState(){
     blackName: S.blackName || '',
     whiteName: S.whiteName || '',
     gameName: S.gameName || '',
+    komi: typeof S.komi === 'number' ? S.komi : null,
+    handicap: typeof S.handicap === 'number' ? S.handicap : 0,
+    result: S.result || '',
     ts: Date.now(),
   };
 }
@@ -1922,6 +2345,11 @@ function viewerStartPlayback(){
   }, 900);
 }
 
+function sendViewerHello(){
+  if(!S.conn || !S.conn.open) return;
+  try{ S.conn.send({ type: 'hello', name: (S.viewerName || '').slice(0, 32) }); }
+  catch(e){}
+}
 function connectToHost(shortId){
   if(!S.peer) return;
   const targetId = PEER_PREFIX + shortId;
@@ -1930,9 +2358,11 @@ function connectToHost(shortId){
   S.conn = conn;
   conn.on('open', ()=>{
     setVStatus('接続済み', 'connected');
+    sendViewerHello();
   });
   conn.on('data', (data)=>{
-    if(data && data.type === 'state'){
+    if(!data || !data.type) return;
+    if(data.type === 'state'){
       S.vLatestState = data;
       const mvCount = (data.moves||[]).length;
       if(mvCount > S.vPrevMoveCount && S.vPrevMoveCount > 0 && S.vAtLive){
@@ -1943,6 +2373,10 @@ function connectToHost(shortId){
       const lat = data.ts ? Math.max(0, Date.now() - data.ts) : null;
       const latStr = lat !== null ? '  遅延 ' + lat + 'ms' : '';
       setVStatus('受信中  ' + new Date().toLocaleTimeString() + latStr, 'connected');
+    } else if(data.type === 'chat'){
+      const text = (typeof data.text === 'string') ? data.text.slice(0, 300) : '';
+      if(!text) return;
+      appendChat({ name: data.name || '(匿名)', text, ts: data.ts || Date.now(), mine: false });
     }
   });
   conn.on('close', ()=>{
@@ -2007,10 +2441,14 @@ async function enterBroadcast(){
   S.initialPosition = null;
   S.suspiciousFrames = 0;
   S.gameStarted = false;
+  S.connInfo = new Map();
+  S.chat = [];
+  renderChat();
   $('moveCount').textContent = 0;
   updateGameStateUI();
   updateRefBoardUI();
   updateStoneCalibUI();
+  updateViewerListUI();
   // Sync UI to settings
   $('blackTh').value = S.blackTh; $('blackVal').textContent = S.blackTh;
   $('whiteTh').value = S.whiteTh; $('whiteVal').textContent = S.whiteTh;
@@ -2018,7 +2456,8 @@ async function enterBroadcast(){
   $('targetFps').value = S.targetFps; $('fpsVal').textContent = S.targetFps;
   $('settleDelay').value = Math.round(S.settleDelayMs/100); $('settleVal').textContent = (S.settleDelayMs/1000).toFixed(1) + 's';
   $('dbgOverlay').checked = S.dbgOverlay;
-  $('squareMode').checked = S.squareMode;
+  $('calibMode').value = S.calibMode;
+  updateCalibModeUI();
   $('autoTurn').checked = S.autoTurn;
   $('trackMoves').checked = S.trackMoves;
   $('soundOn').checked = S.soundOn;
@@ -2026,6 +2465,9 @@ async function enterBroadcast(){
   $('blackName').value = S.blackName || '';
   $('whiteName').value = S.whiteName || '';
   $('gameName').value = S.gameName || '';
+  $('komi').value = (typeof S.komi === 'number') ? S.komi : 6.5;
+  $('handicap').value = S.handicap || 0;
+  $('result').value = S.result || '';
   setActiveSize(S.size);
   drawBoardCanvas('boardB');
   await listCameras();
@@ -2036,9 +2478,40 @@ async function enterBroadcast(){
     startProcessingLoop();
     startPeerHost();
     if(!localStorage.getItem('goboard.tutDone')){
-      setTimeout(()=>toast('① 黄色いハンドルを碁盤の四隅(交点)に合わせる ② 設定でしきい値を調整'), 600);
-      setTimeout(()=>toast('③ 部屋IDかURLを共有 ④ 観戦側はURLを開くだけ'), 4200);
-      localStorage.setItem('goboard.tutDone', '1');
+      const tm = $('tutModal');
+      if(tm){ tm.style.display = 'flex'; }
+    }
+    // Offer to resume the previous game (if recent and has moves)
+    const saved = loadGameSnapshot();
+    if(saved && saved.moves && saved.moves.length){
+      const age = Date.now() - (saved.ts || 0);
+      const ageH = Math.round(age / 3600000);
+      const ageMin = Math.round(age / 60000);
+      const ageStr = ageH > 0 ? (ageH + '時間前') : (ageMin + '分前');
+      const desc = `前回の対局を続けますか？\n\n` +
+        `路盤: ${saved.size}路 / 手数: ${saved.moves.length} / ${ageStr}\n` +
+        `${saved.blackName||'(黒)'} vs ${saved.whiteName||'(白)'}` +
+        (saved.gameName ? `\n対局名: ${saved.gameName}` : '');
+      setTimeout(()=>{
+        if(confirm(desc)) {
+          if(restoreFromSnapshot(saved)) toast('前回の対局を復元しました');
+        } else {
+          if(confirm('前回の対局を破棄しますか？')){
+            // Archive before discarding so user can still recover the SGF
+            try{
+              const list = JSON.parse(localStorage.getItem(ARCHIVED_GAMES_KEY) || '[]');
+              const sgf = buildSGFFrom(saved.size, saved.initialPosition, saved.committed, saved.moves, saved.turn, {
+                blackName: saved.blackName, whiteName: saved.whiteName, gameName: saved.gameName,
+                komi: saved.komi, handicap: saved.handicap, result: saved.result,
+              });
+              list.unshift({ ts: saved.ts, moves: saved.moves.length, result: saved.result, blackName: saved.blackName, whiteName: saved.whiteName, gameName: saved.gameName, sgf });
+              while(list.length > 20) list.pop();
+              localStorage.setItem(ARCHIVED_GAMES_KEY, JSON.stringify(list));
+            }catch(e){}
+            clearGameSnapshot();
+          }
+        }
+      }, 800);
     }
   } catch(e){
     console.error(e);
@@ -2071,10 +2544,14 @@ function exitBroadcast(){
   stopCamera();
   if(S.peer){ try{ S.peer.destroy(); }catch(e){} S.peer = null; }
   S.conns = [];
+  S.connInfo = null;
   showScreen('modeSelect');
 }
 function enterView(shortId){
   showScreen('viewScreen');
+  if($('vNameEdit')) $('vNameEdit').value = S.viewerName || '';
+  S.chat = [];
+  renderChat();
   S.vViewIndex = 0;
   S.vAtLive = true;
   S.vIsPlaying = false;
@@ -2167,6 +2644,13 @@ function init(){
       if(v) enterView(v);
     }
   });
+  // Viewer name input (mode-select screen)
+  $('viewerNameInput').value = S.viewerName || '';
+  $('viewerNameInput').addEventListener('input', e=>{
+    S.viewerName = (e.target.value || '').slice(0, 32);
+    saveSettings();
+    if($('vNameEdit')) $('vNameEdit').value = S.viewerName;
+  });
 
   // Broadcaster controls
   $('bExit').addEventListener('click', exitBroadcast);
@@ -2187,16 +2671,27 @@ function init(){
     saveSettings();
   });
   $('dbgOverlay').addEventListener('change', e=>{ S.dbgOverlay = e.target.checked; saveSettings(); drawOverlay(); });
-  $('squareMode').addEventListener('change', e=>{
-    S.squareMode = e.target.checked;
-    if(S.squareMode){
+  $('calibMode').addEventListener('change', e=>{
+    S.calibMode = e.target.value;
+    if(S.calibMode === 'square'){
       fitSquareToCorners();
       toast('正方形モード: 角でサイズ、中をドラッグで移動');
+    } else if(S.calibMode === 'trapezoid'){
+      fitTrapezoidToCorners();
+      toast('台形モード: 上下の角で幅、中をドラッグで移動、▼▲で上下反転');
     } else {
       toast('自由配置モード');
     }
+    updateCalibModeUI();
     saveSettings();
     drawOverlay();
+  });
+  $('btnFlipTrap').addEventListener('click', ()=>{
+    if(S.calibMode !== 'trapezoid') return;
+    flipTrapezoidVertical();
+    saveSettings();
+    drawOverlay();
+    toast('↕ 上下反転しました（遠近入替）');
   });
   $('autoTurn').addEventListener('change', e=>{ S.autoTurn = e.target.checked; saveSettings(); });
   $('trackMoves').addEventListener('change', e=>{ S.trackMoves = e.target.checked; saveSettings(); });
@@ -2216,6 +2711,23 @@ function init(){
   $('blackName').addEventListener('input', onPlayerNameChange);
   $('whiteName').addEventListener('input', onPlayerNameChange);
   $('gameName').addEventListener('input', onPlayerNameChange);
+  $('komi').addEventListener('input', e=>{
+    const v = parseFloat(e.target.value);
+    S.komi = isNaN(v) ? 0 : v;
+    saveSettings();
+    broadcastState();
+  });
+  $('handicap').addEventListener('input', e=>{
+    const v = parseInt(e.target.value, 10);
+    S.handicap = isNaN(v) ? 0 : Math.max(0, Math.min(9, v));
+    saveSettings();
+    broadcastState();
+  });
+  $('result').addEventListener('input', e=>{
+    S.result = (e.target.value || '').trim().slice(0, 32);
+    broadcastState();
+    saveGameSnapshot();
+  });
   $('btnReset').addEventListener('click', ()=>{
     S.corners = defaultCorners();
     initDetectionState();
@@ -2250,7 +2762,7 @@ function init(){
     updateStoneCalibUI();
     saveSettings();
     drawOverlay();
-    toast('盤を90°回転しました');
+    toast('↻ 時計回りに90°回転しました（左上→右上→右下→左下）');
   });
   $('btnStart').addEventListener('click', ()=>{
     if(!S.committed){ toast('まだ盤面が認識されていません', true); return; }
@@ -2260,25 +2772,35 @@ function init(){
     S.moves = [];
     S.suspiciousFrames = 0;
     S.gameStarted = true;
+    S.result = '';
+    $('result').value = '';
+    S._gameStartedTs = Date.now();
     $('moveCount').textContent = 0;
     updateGameStateUI();
     drawBoardCanvas('boardB');
     broadcastState();
+    saveGameSnapshot();
     toast('ゲーム開始 - ここからカウントします');
   });
   $('btnRestart').addEventListener('click', ()=>{
     if(!S.committed){ toast('まだ盤面が認識されていません', true); return; }
     if(!confirm('現在の手数をリセットして、いまの盤面を1手目の前として始め直しますか？')) return;
+    // Archive the previous game before resetting
+    archiveCurrentGame();
     S.initialPosition = snapshotCommitted();
     syncPrevToCommitted();
     S.movesInitialized = true;
     S.moves = [];
     S.suspiciousFrames = 0;
     S.gameStarted = true;
+    S.result = '';
+    $('result').value = '';
+    S._gameStartedTs = Date.now();
     $('moveCount').textContent = 0;
     updateGameStateUI();
     drawBoardCanvas('boardB');
     broadcastState();
+    saveGameSnapshot();
     toast('初期状態に戻しました（1手目から）');
   });
   $('btnRecalib').addEventListener('click', ()=>{
@@ -2390,7 +2912,7 @@ function init(){
   $('btnUndo').addEventListener('click', ()=>{
     if(!S.moves.length){ toast('取消す手がありません', true); return; }
     const m = S.moves.pop();
-    if(S.committed[m.x] && S.committed[m.x][m.y] === m.c){
+    if(m.x != null && m.y != null && S.committed[m.x] && S.committed[m.x][m.y] === m.c){
       S.committed[m.x][m.y] = '.';
       S.history[m.x][m.y] = Array.from({length:S.histDepth}, ()=>'.');
       S.prevCommitted[m.x][m.y] = '.';
@@ -2399,7 +2921,42 @@ function init(){
     drawBoardCanvas('boardB');
     drawOverlay();
     broadcastState();
+    saveGameSnapshot();
     toast('最終手を取消');
+  });
+  $('btnPass').addEventListener('click', ()=>{
+    if(!S.gameStarted){ toast('まず「開始」を押してください', true); return; }
+    const c = S.turn || 'B';
+    S.moves.push({ c, x: null, y: null, t: Date.now() });
+    $('moveCount').textContent = S.moves.length;
+    // Manually flip turn since stone count didn't change
+    S.turn = (c === 'B') ? 'W' : 'B';
+    $('turnInd').innerHTML = '手番: <b>' + (S.turn==='B' ? '黒●' : '白○') + '</b>';
+    S.lastMoveTime = Date.now();
+    drawBoardCanvas('boardB');
+    broadcastState();
+    saveGameSnapshot();
+    playStoneClick();
+    toast(c==='B' ? '黒がパス' : '白がパス');
+  });
+  $('btnResign').addEventListener('click', ()=>{
+    if(!S.gameStarted){ toast('まず「開始」を押してください', true); return; }
+    const loser = S.turn || 'B';  // whoever is to move resigns
+    const winner = loser === 'B' ? 'W' : 'B';
+    const which = prompt(
+      '投了するのはどちら？ B = 黒、W = 白 を入力してください。\n' +
+      '（既定は手番側 ' + (loser==='B'?'黒':'白') + ' が投了 → ' + (winner==='B'?'B+R':'W+R') + '）',
+      loser
+    );
+    if(which == null) return;
+    const v = which.trim().toUpperCase();
+    if(v !== 'B' && v !== 'W'){ toast('B か W を入力してください', true); return; }
+    const won = v === 'B' ? 'W' : 'B';
+    S.result = won + '+R';
+    $('result').value = S.result;
+    broadcastState();
+    saveGameSnapshot();
+    toast((won==='B'?'黒':'白') + 'の勝ち（' + S.result + '）');
   });
   $('copyId').addEventListener('click', async ()=>{
     const v = $('roomId').textContent;
@@ -2424,6 +2981,56 @@ function init(){
 
   // Viewer controls
   $('vExit').addEventListener('click', exitView);
+  // In-viewer name edit (debounced re-hello so we don't spam the broadcaster)
+  let _vNameTimer = null;
+  $('vNameEdit').addEventListener('input', e=>{
+    S.viewerName = (e.target.value || '').slice(0, 32);
+    saveSettings();
+    if($('viewerNameInput')) $('viewerNameInput').value = S.viewerName;
+    clearTimeout(_vNameTimer);
+    _vNameTimer = setTimeout(sendViewerHello, 600);
+  });
+  // Chat: broadcaster
+  function sendBChat(){
+    const v = $('bChatInput').value.trim();
+    if(!v) return;
+    if(!S.conns || !S.conns.length){ toast('まだ観戦者がいません', true); }
+    broadcasterSendChat(v.slice(0, 300));
+    $('bChatInput').value = '';
+  }
+  $('bChatSend').addEventListener('click', sendBChat);
+  $('bChatInput').addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); sendBChat(); } });
+  // Chat: viewer
+  function sendVChat(){
+    const v = $('vChatInput').value.trim();
+    if(!v) return;
+    viewerSendChat(v.slice(0, 300));
+    $('vChatInput').value = '';
+  }
+  $('vChatSend').addEventListener('click', sendVChat);
+  $('vChatInput').addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); sendVChat(); } });
+  // Tutorial modal close
+  $('tutClose').addEventListener('click', ()=>{
+    const tm = $('tutModal');
+    if(tm) tm.style.display = 'none';
+    localStorage.setItem('goboard.tutDone', '1');
+  });
+  $('btnShowTut').addEventListener('click', ()=>{
+    const tm = $('tutModal');
+    if(tm) tm.style.display = 'flex';
+  });
+  // Broadcaster: toggle viewer list
+  $('btnViewerList').addEventListener('click', ()=>{
+    const list = $('viewerList');
+    const btn = $('btnViewerList');
+    if(list.style.display === 'none'){
+      list.style.display = '';
+      btn.textContent = '△ 名前一覧';
+    } else {
+      list.style.display = 'none';
+      btn.textContent = '▽ 名前一覧';
+    }
+  });
   function syncViewerToggleLabels(){
     $('vSoundBtn').textContent = (S.soundOn ? '🔔 音オン' : '🔇 音オフ');
     $('vNumBtn').textContent = '手数表示 ' + (S.showMoveNum ? 'オン' : 'オフ');
@@ -2488,7 +3095,8 @@ function init(){
     if(!S.vLatestState){ toast('盤面データがまだ届いていません', true); return; }
     const d = S.vLatestState;
     const text = buildSGFFrom(d.size, d.initialPosition || null, d.committed, d.moves, d.turn, {
-      blackName: d.blackName, whiteName: d.whiteName, gameName: d.gameName
+      blackName: d.blackName, whiteName: d.whiteName, gameName: d.gameName,
+      komi: d.komi, handicap: d.handicap, result: d.result,
     });
     downloadSGF(text, 'goboard_view');
     toast('SGFをダウンロード');
@@ -2514,6 +3122,12 @@ function init(){
   }
 }
 document.addEventListener('DOMContentLoaded', init);
+// PWA: register the service worker so the app installs and works offline.
+if('serviceWorker' in navigator && location.protocol !== 'file:'){
+  window.addEventListener('load', ()=>{
+    navigator.serviceWorker.register('go-board-sw.js').catch(err => console.warn('SW register failed', err));
+  });
+}
 </script>
 </body>
 </html>
