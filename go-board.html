@@ -535,6 +535,9 @@ const S = {
   //  'trapezoid' = left/right symmetric trapezoid (for side-on shots where the
   //                far edge looks shorter than the near edge).
   calibMode: 'free',
+  // Board display rotation (0-3, incremented CW by the rotate button).
+  // Rotates the virtual board canvas so it matches the physical board orientation.
+  boardRotation: 0,
   // Offscreen
   procCanvas: null,
   procCtx: null,
@@ -816,6 +819,7 @@ function loadSettings(){
     if(typeof j.showMoveNum === 'boolean') S.showMoveNum = j.showMoveNum;
     if(typeof j.calibMode === 'string' && ['free','square','trapezoid'].includes(j.calibMode)) S.calibMode = j.calibMode;
     else if(j.squareMode === true) S.calibMode = 'square';  // migrate
+    if(typeof j.boardRotation === 'number') S.boardRotation = j.boardRotation & 3;
     if(typeof j.blackName === 'string') S.blackName = j.blackName;
     if(typeof j.whiteName === 'string') S.whiteName = j.whiteName;
     if(typeof j.gameName === 'string') S.gameName = j.gameName;
@@ -841,6 +845,7 @@ function saveSettings(){
       soundOn: S.soundOn,
       showMoveNum: S.showMoveNum,
       calibMode: S.calibMode,
+      boardRotation: S.boardRotation,
       blackName: S.blackName,
       whiteName: S.whiteName,
       gameName: S.gameName,
@@ -1812,11 +1817,15 @@ function drawBoardCanvas(canvasId, override){
   const want = Math.max(300, Math.min(720, Math.round((css.width||500) * dpr)));
   if(cnv.width !== want){ cnv.width = want; cnv.height = want; }
   const W = cnv.width;
+  const rot = (override && override.boardRotation != null) ? override.boardRotation : (S.boardRotation || 0);
   const margin = W * 0.04;
   const inner = W - margin*2;
   const step = inner / (N-1);
   // Background
   ctx.clearRect(0,0,W,W);
+  // Apply board rotation so the virtual board matches the physical camera orientation
+  ctx.save();
+  if(rot){ ctx.translate(W/2, W/2); ctx.rotate(rot * Math.PI/2); ctx.translate(-W/2, -W/2); }
   const grad = ctx.createLinearGradient(0,0,0,W);
   grad.addColorStop(0, '#e6c07a');
   grad.addColorStop(1, '#d4a55a');
@@ -1934,6 +1943,25 @@ function drawBoardCanvas(canvasId, override){
       ctx.fill();
     }
   }
+  ctx.restore(); // end board rotation
+  // "↑ 上" indicator — always upright at the visual top of the canvas
+  {
+    const indFs = Math.max(11, Math.round(W * 0.040));
+    ctx.save();
+    ctx.font = `bold ${indFs}px sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const indText = '↑ 上';
+    const tw = ctx.measureText(indText).width;
+    const padX = 8, padY = 4;
+    const bw = tw + padX*2, bh = indFs + padY*2;
+    const bx = W/2 - bw/2, by = 3;
+    ctx.fillStyle = 'rgba(26,18,8,0.70)';
+    ctx.fillRect(bx, by, bw, bh);
+    ctx.fillStyle = '#f4d03f';
+    ctx.fillText(indText, W/2, by + bh/2);
+    ctx.restore();
+  }
 }
 
 // ============================================================
@@ -1944,10 +1972,15 @@ function attachBoardEdit(){
   cnv.addEventListener('click', (e)=>{
     if(!S.committed) return;
     const r = cnv.getBoundingClientRect();
-    const px = (e.clientX - r.left) * (cnv.width / r.width);
-    const py = (e.clientY - r.top) * (cnv.height / r.height);
+    let px = (e.clientX - r.left) * (cnv.width / r.width);
+    let py = (e.clientY - r.top) * (cnv.height / r.height);
     const N = S.size;
     const W = cnv.width;
+    // Un-rotate tap coordinates to match original stone grid
+    const rot = S.boardRotation || 0;
+    if(rot === 1){ const tmp=px; px=py; py=W-tmp; }
+    else if(rot === 2){ px=W-px; py=W-py; }
+    else if(rot === 3){ const tmp=px; px=W-py; py=tmp; }
     const margin = W * 0.04;
     const inner = W - margin*2;
     const step = inner / (N-1);
@@ -2749,6 +2782,7 @@ function init(){
     if(!S.corners) return;
     // Rotate corner labels 90° CW: TL←BL, TR←TL, BR←TR, BL←BR
     S.corners = [S.corners[3], S.corners[0], S.corners[1], S.corners[2]];
+    S.boardRotation = (S.boardRotation + 1) & 3;
     initDetectionState();
     S.movesInitialized = false;
     S.initialPosition = null;
@@ -2762,6 +2796,7 @@ function init(){
     updateStoneCalibUI();
     saveSettings();
     drawOverlay();
+    drawBoardCanvas('boardB');
     toast('↻ 時計回りに90°回転しました（左上→右上→右下→左下）');
   });
   $('btnStart').addEventListener('click', ()=>{
