@@ -742,7 +742,10 @@ function archiveCurrentGame(){
     // Cap at 20 archived games
     while(list.length > 20) list.pop();
     localStorage.setItem(ARCHIVED_GAMES_KEY, JSON.stringify(list));
-  }catch(e){ console.warn('archive failed', e); }
+  }catch(e){
+    console.warn('archive failed', e);
+    if(e && e.name === 'QuotaExceededError') toast('⚠ ストレージ容量が不足しています。古いアーカイブを削除してください', true);
+  }
 }
 function restoreFromSnapshot(snap){
   if(!snap || snap.v !== 1) return false;
