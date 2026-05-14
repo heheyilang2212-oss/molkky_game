@@ -12,8 +12,8 @@
 <title>碁盤カメラ中継</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
-html,body{height:100%;background:#0e0e10;color:#e8e8ea;font-family:'Hiragino Kaku Gothic ProN','Yu Gothic',Meiryo,sans-serif;overflow:hidden;user-select:none;-webkit-user-select:none}
-button,input,select{font-family:inherit;font-size:inherit}
+html,body{height:100%;background:#0e0e10;color:#e8e8ea;font-family:'Hiragino Kaku Gothic ProN','Yu Gothic',Meiryo,sans-serif;overflow:hidden;user-select:none;-webkit-user-select:none;touch-action:manipulation}
+button,input,select{font-family:inherit;font-size:inherit;touch-action:manipulation}
 button{cursor:pointer}
 a{color:#7cb7ff}
 
@@ -223,11 +223,19 @@ a{color:#7cb7ff}
     <div class="board-area">
       <canvas id="boardB" width="500" height="500"></canvas>
     </div>
-    <div id="calibPrompt" style="display:none;background:rgba(244,208,63,.12);border:2px solid #f4d03f;border-radius:10px;padding:14px;flex-direction:column;gap:10px">
-      <div id="calibPromptMsg" style="color:#f4d03f;font-weight:700;text-align:center;font-size:.95rem;line-height:1.5"></div>
+    <div id="calibPrompt" style="display:none;position:fixed;bottom:0;left:0;right:0;z-index:1000;background:rgba(16,16,16,.97);border-top:2px solid #f4d03f;padding:14px 16px;flex-direction:column;gap:10px;box-shadow:0 -4px 24px rgba(0,0,0,.6)">
+      <div id="calibPromptMsg" style="color:#f4d03f;font-weight:700;text-align:center;font-size:.92rem;line-height:1.5"></div>
       <div style="display:flex;gap:10px;justify-content:center">
         <button id="calibPromptOk" style="padding:10px 28px;border-radius:8px;border:none;background:#f4d03f;color:#1a1a1a;font-weight:700;font-size:.95rem;min-width:100px">OK</button>
         <button id="calibPromptCancel" style="padding:10px 22px;border-radius:8px;border:1px solid rgba(255,255,255,.25);background:rgba(255,255,255,.06);color:#ddd;font-size:.9rem;min-width:100px">キャンセル</button>
+      </div>
+    </div>
+    <div id="resignPanel" style="display:none;position:fixed;bottom:0;left:0;right:0;z-index:1000;background:rgba(16,16,16,.97);border-top:2px solid rgba(255,100,100,.7);padding:14px 16px;flex-direction:column;gap:10px;box-shadow:0 -4px 24px rgba(0,0,0,.6)">
+      <div style="color:#ff7070;font-weight:700;text-align:center;font-size:.95rem">どちらが投了しますか？</div>
+      <div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap">
+        <button id="resignBlackBtn" style="padding:9px 20px;border-radius:8px;border:none;background:#222;color:#fff;font-weight:700;font-size:.9rem">⬛ 黒が投了</button>
+        <button id="resignWhiteBtn" style="padding:9px 20px;border-radius:8px;border:none;background:#eee;color:#222;font-weight:700;font-size:.9rem">⬜ 白が投了</button>
+        <button id="resignCancelBtn" style="padding:9px 16px;border-radius:8px;border:1px solid rgba(255,255,255,.25);background:rgba(255,255,255,.06);color:#ddd;font-size:.88rem">キャンセル</button>
       </div>
     </div>
     <div class="share">
@@ -621,8 +629,15 @@ function escapeHtml(s){
 // ============================================================
 // CHAT
 // ============================================================
+function genChatId(){
+  return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+}
 function appendChat(msg){
   if(!S.chat) S.chat = [];
+  // Deduplicate by id: a reconnect can leave a stale DataConnection on the
+  // broadcaster, which then echoes a viewer's own message back to it (or to
+  // other viewers twice). Dropping already-seen ids makes that harmless.
+  if(msg.id && S.chat.some(m => m.id === msg.id)) return;
   S.chat.push(msg);
   while(S.chat.length > 100) S.chat.shift();
   renderChat();
@@ -646,16 +661,18 @@ function renderChat(){
   if($('vChatCount')) $('vChatCount').textContent = '(' + cnt + ')';
 }
 function broadcasterSendChat(text){
-  const msg = { type: 'chat', name: (S.gameName || 'ホスト') || 'ホスト', text: text, ts: Date.now() };
-  appendChat({ name: msg.name, text: msg.text, ts: msg.ts, mine: true });
+  const id = genChatId();
+  const msg = { type: 'chat', id, name: (S.gameName || 'ホスト') || 'ホスト', text: text, ts: Date.now() };
+  appendChat({ id, name: msg.name, text: msg.text, ts: msg.ts, mine: true });
   for(const c of (S.conns || [])){
     try{ c.send(msg); }catch(e){}
   }
 }
 function broadcasterRelayChat(from, msg){
   // Echo to other viewers + append locally
-  const out = { type: 'chat', name: msg.name || '(匿名)', text: msg.text, ts: msg.ts || Date.now() };
-  appendChat({ name: out.name, text: out.text, ts: out.ts, mine: false });
+  const id = msg.id || genChatId();
+  const out = { type: 'chat', id, name: msg.name || '(匿名)', text: msg.text, ts: msg.ts || Date.now() };
+  appendChat({ id, name: out.name, text: out.text, ts: out.ts, mine: false });
   for(const c of (S.conns || [])){
     if(c === from) continue;
     try{ c.send(out); }catch(e){}
@@ -663,8 +680,9 @@ function broadcasterRelayChat(from, msg){
 }
 function viewerSendChat(text){
   if(!S.conn || !S.conn.open) { toast('未接続です', true); return; }
-  const msg = { type: 'chat', name: (S.viewerName || '').trim() || '(匿名)', text: text, ts: Date.now() };
-  appendChat({ name: msg.name, text: msg.text, ts: msg.ts, mine: true });
+  const id = genChatId();
+  const msg = { type: 'chat', id, name: (S.viewerName || '').trim() || '(匿名)', text: text, ts: Date.now() };
+  appendChat({ id, name: msg.name, text: msg.text, ts: msg.ts, mine: true });
   try{ S.conn.send(msg); }catch(e){}
 }
 // ============================================================
@@ -1638,11 +1656,12 @@ function detectFrame(){
   // Most points are empty (= wood) for typical positions, so median ≈ wood V.
   const Vall = Array.from(Vs);
   const ref = median(Vall);
-  // A real white stone is nearly grayscale (low saturation). Light reflections
-  // and yellow/warm glares often have high saturation, so we reject them as
-  // "white" candidates here. The board wood itself is moderately saturated
-  // (~0.3-0.5 brown), so this also helps avoid calling bright wood "W".
-  const W_SAT_MAX = 0.30;
+  // A real white stone is nearly grayscale, but warm indoor lighting (LED /
+  // incandescent) tints it noticeably yellow, pushing saturation well past
+  // 0.3. We still want to reject strongly coloured glare, so the gate sits at
+  // 0.45 — generous enough for warm-lit white stones, since the brightness
+  // test (v > ref + whiteTh) already excludes the board wood itself.
+  const W_SAT_MAX = 0.45;
   // If we have a recorded empty-board reference for the current board size,
   // use it directly as the per-cell baseline. This handles wood-grain knots,
   // persistent shadows, and bowl/lid placement under the camera much better
@@ -2283,7 +2302,7 @@ function startPeerHost(forceNewId){
         if(!text) return;
         const meta = S.connInfo && S.connInfo.get(conn);
         const name = (data.name && data.name.trim()) || (meta && meta.name) || '(匿名)';
-        broadcasterRelayChat(conn, { name, text, ts: data.ts || Date.now() });
+        broadcasterRelayChat(conn, { id: data.id, name, text, ts: data.ts || Date.now() });
       }
     });
     const handleGone = ()=>{
@@ -2606,7 +2625,7 @@ function connectToHost(shortId){
     } else if(data.type === 'chat'){
       const text = (typeof data.text === 'string') ? data.text.slice(0, 300) : '';
       if(!text) return;
-      appendChat({ name: data.name || '(匿名)', text, ts: data.ts || Date.now(), mine: false });
+      appendChat({ id: data.id, name: data.name || '(匿名)', text, ts: data.ts || Date.now(), mine: false });
     }
   });
   conn.on('close', ()=>{
@@ -2750,24 +2769,26 @@ async function enterBroadcast(){
         `${saved.blackName||'(黒)'} vs ${saved.whiteName||'(白)'}` +
         (saved.gameName ? `\n対局名: ${saved.gameName}` : '');
       setTimeout(()=>{
-        if(confirm(desc)) {
-          if(restoreFromSnapshot(saved)) toast('前回の対局を復元しました');
-        } else {
-          if(confirm('前回の対局を破棄しますか？')){
-            // Archive before discarding so user can still recover the SGF
-            try{
-              const list = JSON.parse(localStorage.getItem(ARCHIVED_GAMES_KEY) || '[]');
-              const sgf = buildSGFFrom(saved.size, saved.initialPosition, saved.committed, saved.moves, saved.turn, {
-                blackName: saved.blackName, whiteName: saved.whiteName, gameName: saved.gameName,
-                komi: saved.komi, handicap: saved.handicap, result: saved.result,
-              });
-              list.unshift({ ts: saved.ts, moves: saved.moves.length, result: saved.result, blackName: saved.blackName, whiteName: saved.whiteName, gameName: saved.gameName, sgf });
-              while(list.length > 20) list.pop();
-              localStorage.setItem(ARCHIVED_GAMES_KEY, JSON.stringify(list));
-            }catch(e){}
-            clearGameSnapshot();
-          }
-        }
+        showCalibPrompt(
+          desc.replace(/\n/g, '<br>'),
+          ()=>{ if(restoreFromSnapshot(saved)) toast('前回の対局を復元しました'); },
+          ()=>{
+            showCalibPrompt('前回の対局を破棄しますか？', ()=>{
+              try{
+                const list = JSON.parse(localStorage.getItem(ARCHIVED_GAMES_KEY) || '[]');
+                const sgf = buildSGFFrom(saved.size, saved.initialPosition, saved.committed, saved.moves, saved.turn, {
+                  blackName: saved.blackName, whiteName: saved.whiteName, gameName: saved.gameName,
+                  komi: saved.komi, handicap: saved.handicap, result: saved.result,
+                });
+                list.unshift({ ts: saved.ts, moves: saved.moves.length, result: saved.result, blackName: saved.blackName, whiteName: saved.whiteName, gameName: saved.gameName, sgf });
+                while(list.length > 20) list.pop();
+                localStorage.setItem(ARCHIVED_GAMES_KEY, JSON.stringify(list));
+              }catch(e){}
+              clearGameSnapshot();
+            }, null, '破棄する');
+          },
+          '復元する'
+        );
       }, 800);
     }
   } catch(e){
@@ -3083,24 +3104,25 @@ function init(){
   });
   $('btnRestart').addEventListener('click', ()=>{
     if(!S.committed){ toast('まだ盤面が認識されていません', true); return; }
-    if(!confirm('現在の手数をリセットして、いまの盤面を1手目の前として始め直しますか？')) return;
-    // Archive the previous game before resetting
-    archiveCurrentGame();
-    S.initialPosition = snapshotCommitted();
-    syncPrevToCommitted();
-    S.movesInitialized = true;
-    S.moves = [];
-    S.suspiciousFrames = 0;
-    S.gameStarted = true;
-    S.result = '';
-    $('result').value = '';
-    S._gameStartedTs = Date.now();
-    $('moveCount').textContent = 0;
-    updateGameStateUI();
-    drawBoardCanvas('boardB');
-    broadcastState();
-    saveGameSnapshot();
-    toast('初期状態に戻しました（1手目から）');
+    showCalibPrompt('現在の手数をリセットして、<br>いまの盤面を1手目の前として始め直しますか？', ()=>{
+      // Archive the previous game before resetting
+      archiveCurrentGame();
+      S.initialPosition = snapshotCommitted();
+      syncPrevToCommitted();
+      S.movesInitialized = true;
+      S.moves = [];
+      S.suspiciousFrames = 0;
+      S.gameStarted = true;
+      S.result = '';
+      $('result').value = '';
+      S._gameStartedTs = Date.now();
+      $('moveCount').textContent = 0;
+      updateGameStateUI();
+      drawBoardCanvas('boardB');
+      broadcastState();
+      saveGameSnapshot();
+      toast('初期状態に戻しました（1手目から）');
+    });
   });
   $('btnRecalib').addEventListener('click', ()=>{
     initDetectionState();
@@ -3121,22 +3143,31 @@ function init(){
     if(!S.committed){ toast('まだ盤面が認識されていません', true); return; }
     let stoneCount = 0;
     for(const row of S.committed) for(const c of row) if(c !== '.') stoneCount++;
-    if(stoneCount > 0 && !confirm(`現在 ${stoneCount} 個の石が認識されています。盤面を空にしてから押してください。それでも記録しますか？`)) return;
-    S.refBoard = {
-      size: S.size,
-      V: new Float32Array(S._lastVs),
-      S: new Float32Array(S._lastSs),
-      ts: Date.now(),
+    const doCapture = ()=>{
+      S.refBoard = {
+        size: S.size,
+        V: new Float32Array(S._lastVs),
+        S: new Float32Array(S._lastSs),
+        ts: Date.now(),
+      };
+      initDetectionState();
+      S.gameStarted = false;
+      S.moves = [];
+      S.movesInitialized = false;
+      S.initialPosition = null;
+      $('moveCount').textContent = 0;
+      updateGameStateUI();
+      updateRefBoardUI();
+      toast('空の盤面を記録しました - これを基準に判定します');
     };
-    initDetectionState();
-    S.gameStarted = false;
-    S.moves = [];
-    S.movesInitialized = false;
-    S.initialPosition = null;
-    $('moveCount').textContent = 0;
-    updateGameStateUI();
-    updateRefBoardUI();
-    toast('空の盤面を記録しました - これを基準に判定します');
+    if(stoneCount > 0){
+      showCalibPrompt(
+        `現在 ${stoneCount} 個の石が認識されています。<br>盤面を空にしてから押すことをおすすめします。<br>それでも記録しますか？`,
+        doCapture, null, '記録する'
+      );
+    } else {
+      doCapture();
+    }
   });
   $('btnClearRef').addEventListener('click', ()=>{
     S.refBoard = null;
@@ -3150,15 +3181,17 @@ function init(){
     updateRefBoardUI();
     toast('基準をクリア - 自動の局所基準で判定します');
   });
-  // Calibration uses a custom inline prompt (not native confirm()) because the
-  // native dialog freezes <video> rendering on iOS Safari — which is the root
-  // cause of the camera-freeze symptom right after recording calibration stones.
-  function showCalibPrompt(msg, onOk, onCancel){
+  // All inline dialogs below replace native confirm()/prompt() because those
+  // freeze <video> rendering on iOS Safari.
+  // Both panels are position:fixed at the bottom of the viewport so they appear
+  // without scrolling — scrollIntoView would push the camera <video> off-screen,
+  // which causes iOS Safari to suspend video playback and freeze the feed.
+  function showCalibPrompt(msg, onOk, onCancel, okLabel){
     const panel = $('calibPrompt');
     if(!panel) return;
     $('calibPromptMsg').innerHTML = msg;
+    $('calibPromptOk').textContent = okLabel || 'OK';
     panel.style.display = 'flex';
-    panel.scrollIntoView({behavior:'smooth', block:'center'});
     const okBtn = $('calibPromptOk');
     const cnBtn = $('calibPromptCancel');
     const cleanup = ()=>{
@@ -3169,19 +3202,32 @@ function init(){
     okBtn.onclick = ()=>{ cleanup(); if(onOk) onOk(); };
     cnBtn.onclick = ()=>{ cleanup(); if(onCancel) onCancel(); };
   }
+  function showResignPanel(onBlack, onWhite, onCancel){
+    const panel = $('resignPanel');
+    if(!panel) return;
+    panel.style.display = 'flex';
+    const bBtn = $('resignBlackBtn');
+    const wBtn = $('resignWhiteBtn');
+    const cBtn = $('resignCancelBtn');
+    const cleanup = ()=>{
+      panel.style.display = 'none';
+      bBtn.onclick = null; wBtn.onclick = null; cBtn.onclick = null;
+    };
+    bBtn.onclick = ()=>{ cleanup(); if(onBlack) onBlack(); };
+    wBtn.onclick = ()=>{ cleanup(); if(onWhite) onWhite(); };
+    cBtn.onclick = ()=>{ cleanup(); if(onCancel) onCancel(); };
+  }
   $('btnCalibStones').addEventListener('click', ()=>{
     const N = S.size;
     const sp = CORNER_STAR_POINTS[N];
     if(!sp){ toast(N+'路盤の星座標が未登録です', true); return; }
     if(!S._lastVs || S._lastVs.length !== N*N){ toast('まだ盤面が認識できていません', true); return; }
-    // Step 1: scroll to the virtual board and show the markers.
+    // Draw guide markers on the virtual board (user can scroll down to see them)
+    // but do NOT scrollIntoView — that pushes the camera off-screen and freezes
+    // the iOS video feed. The confirm panel is position:fixed so no scroll needed.
     S.showCalibGuide = true;
     drawBoardCanvas('boardB');
-    const ba = document.querySelector('.board-area');
-    if(ba) ba.scrollIntoView({behavior:'smooth', block:'start'});
-    // Step 2: show inline OK/cancel below the board so the markers stay visible.
-    setTimeout(()=>{
-      showCalibPrompt(
+    showCalibPrompt(
         '仮想盤に表示された印の通りに石を置いてください<br>' +
         '<span style="color:#fff;font-weight:400;font-size:.85rem">' +
         '●黒石 → 右上・右下 の星<br>' +
@@ -3236,7 +3282,6 @@ function init(){
           drawBoardCanvas('boardB');
         }
       );
-    }, 350);
   });
   $('btnClearCalib').addEventListener('click', ()=>{
     S.stoneCalib = null;
@@ -3296,22 +3341,21 @@ function init(){
   });
   $('btnResign').addEventListener('click', ()=>{
     if(!S.gameStarted){ toast('まず「開始」を押してください', true); return; }
-    const loser = S.turn || 'B';  // whoever is to move resigns
-    const winner = loser === 'B' ? 'W' : 'B';
-    const which = prompt(
-      '投了するのはどちら？ B = 黒、W = 白 を入力してください。\n' +
-      '（既定は手番側 ' + (loser==='B'?'黒':'白') + ' が投了 → ' + (winner==='B'?'B+R':'W+R') + '）',
-      loser
+    showResignPanel(
+      ()=>{
+        S.result = 'W+R';
+        $('result').value = S.result;
+        broadcastState(); saveGameSnapshot();
+        toast('白の勝ち（W+R）');
+      },
+      ()=>{
+        S.result = 'B+R';
+        $('result').value = S.result;
+        broadcastState(); saveGameSnapshot();
+        toast('黒の勝ち（B+R）');
+      },
+      null
     );
-    if(which == null) return;
-    const v = which.trim().toUpperCase();
-    if(v !== 'B' && v !== 'W'){ toast('B か W を入力してください', true); return; }
-    const won = v === 'B' ? 'W' : 'B';
-    S.result = won + '+R';
-    $('result').value = S.result;
-    broadcastState();
-    saveGameSnapshot();
-    toast((won==='B'?'黒':'白') + 'の勝ち（' + S.result + '）');
   });
   $('copyId').addEventListener('click', async ()=>{
     const v = $('roomId').textContent;
