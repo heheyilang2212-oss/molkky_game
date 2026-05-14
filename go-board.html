@@ -1652,10 +1652,19 @@ function detectFrame(){
   }
   // Stash the latest per-cell samples so the "空の盤面を記録" button can use them.
   S._lastVs = Vs; S._lastSs = Ss;
-  // Estimate board reference brightness as median of all intersections.
-  // Most points are empty (= wood) for typical positions, so median ≈ wood V.
-  const Vall = Array.from(Vs);
-  const ref = median(Vall);
+  // Estimate wood brightness from known-empty intersections only.
+  // Using all cells (including stones) biases the median as the board fills up —
+  // dense black stones pull ref down, white stones push it up — causing thresholds
+  // to drift and accuracy to degrade. S.committed holds the last confirmed state,
+  // so empty cells there are reliable wood samples. Fall back to all cells only
+  // when committed is unavailable or the board is extremely crowded (<10% empty).
+  const woodVals = [];
+  if(S.committed && S.committed.length === N){
+    for(let i=0;i<N;i++) for(let j=0;j<N;j++)
+      if(S.committed[i][j] === '.') woodVals.push(Vs[i*N + j]);
+  }
+  const ref = (woodVals.length >= Math.ceil(N*N * 0.1))
+    ? median(woodVals) : median(Array.from(Vs));
   // A real white stone is nearly grayscale, but warm indoor lighting (LED /
   // incandescent) tints it noticeably yellow, pushing saturation well past
   // 0.3. We still want to reject strongly coloured glare, so the gate sits at
@@ -1727,17 +1736,30 @@ function detectFrame(){
     // empty neighbours exist (highly populated region).
     const radius = 2;
     const tmp = [];
+    const hasCommitted = !!(S.committed && S.committed.length === N);
     for(let i=0;i<N;i++){
       cls[i] = new Array(N);
       for(let j=0;j<N;j++){
         tmp.length = 0;
-        for(let di=-radius; di<=radius; di++){
-          const ni = i+di;
-          if(ni<0||ni>=N) continue;
-          for(let dj=-radius; dj<=radius; dj++){
-            const nj = j+dj;
-            if(nj<0||nj>=N) continue;
-            if(cls1[ni][nj] === '.') tmp.push(Vs[ni*N + nj]);
+        // Primary: cells confirmed empty by the previous committed state —
+        // stable even in dense regions where cls1 neighbours are sparse.
+        if(hasCommitted){
+          for(let di=-radius; di<=radius; di++){
+            const ni = i+di; if(ni<0||ni>=N) continue;
+            for(let dj=-radius; dj<=radius; dj++){
+              const nj = j+dj; if(nj<0||nj>=N) continue;
+              if(S.committed[ni][nj] === '.') tmp.push(Vs[ni*N + nj]);
+            }
+          }
+        }
+        // Fallback: cells classified empty in pass-1 (catches newly emptied cells)
+        if(tmp.length < 4){
+          for(let di=-radius; di<=radius; di++){
+            const ni = i+di; if(ni<0||ni>=N) continue;
+            for(let dj=-radius; dj<=radius; dj++){
+              const nj = j+dj; if(nj<0||nj>=N) continue;
+              if(cls1[ni][nj] === '.') tmp.push(Vs[ni*N + nj]);
+            }
           }
         }
         const lref = tmp.length >= 4 ? median(tmp) : ref;
