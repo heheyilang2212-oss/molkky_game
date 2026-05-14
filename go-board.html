@@ -881,18 +881,28 @@ function renderArchivePanel(){
         <div style="color:#f4d03f;font-weight:600">${bName} vs ${wName}${gName}${res}</div>
         <div style="color:#888;font-size:.75rem">${dStr} / ${g.moves || 0}手</div>
       </div>
-      <button data-idx="${idx}" style="padding:4px 10px;border-radius:6px;background:rgba(244,208,63,.18);color:#f4d03f;border:1px solid rgba(244,208,63,.35);font-size:.75rem;white-space:nowrap">SGF</button>
+      <button data-sgf="${idx}" style="padding:4px 10px;border-radius:6px;background:rgba(244,208,63,.18);color:#f4d03f;border:1px solid rgba(244,208,63,.35);font-size:.75rem;white-space:nowrap">SGF</button>
+      <button data-del="${idx}" style="padding:4px 8px;border-radius:6px;background:rgba(255,80,80,.12);color:#ff8080;border:1px solid rgba(255,80,80,.3);font-size:.75rem;white-space:nowrap">✕</button>
     </div>`;
   }).join('');
-  list.querySelectorAll('button[data-idx]').forEach(btn => {
+  list.querySelectorAll('button[data-sgf]').forEach(btn => {
     btn.addEventListener('click', () => {
-      const idx = +btn.dataset.idx;
+      const idx = +btn.dataset.sgf;
       const g = archives[idx];
       if(!g || !g.sgf) return;
       const d = new Date(g.ts || 0);
       const stamp = d.toISOString().slice(0,10);
       downloadSGF(g.sgf, 'goboard_archive_' + stamp);
       toast('アーカイブからSGFをダウンロード');
+    });
+  });
+  list.querySelectorAll('button[data-del]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const idx = +btn.dataset.del;
+      archives.splice(idx, 1);
+      try{ localStorage.setItem(ARCHIVED_GAMES_KEY, JSON.stringify(archives)); }catch(e){}
+      renderArchivePanel();
+      toast('アーカイブを削除しました');
     });
   });
 }
@@ -946,6 +956,13 @@ function loadSettings(){
     if(typeof j.komi === 'number') S.komi = j.komi;
     if(typeof j.handicap === 'number') S.handicap = j.handicap;
     if(j.selectedCamId) S.selectedCamId = j.selectedCamId;
+    // Restore calibration data across sessions (Float32Array serialized as plain array)
+    if(j.refBoard && Array.isArray(j.refBoard.V) && Array.isArray(j.refBoard.S) &&
+       j.refBoard.V.length === j.refBoard.size * j.refBoard.size){
+      S.refBoard = { size: j.refBoard.size, V: new Float32Array(j.refBoard.V),
+                     S: new Float32Array(j.refBoard.S), ts: j.refBoard.ts };
+    }
+    if(j.stoneCalib && typeof j.stoneCalib.blackV === 'number') S.stoneCalib = j.stoneCalib;
   }catch(e){}
 }
 function saveSettings(){
@@ -972,6 +989,12 @@ function saveSettings(){
       komi: S.komi,
       handicap: S.handicap,
       selectedCamId: S.selectedCamId,
+      // Calibration data persisted across sessions (Float32Array → plain array for JSON)
+      refBoard: (S.refBoard && S.refBoard.V) ? {
+        size: S.refBoard.size, ts: S.refBoard.ts,
+        V: Array.from(S.refBoard.V), S: Array.from(S.refBoard.S),
+      } : null,
+      stoneCalib: S.stoneCalib || null,
     }));
   }catch(e){}
 }
@@ -3355,6 +3378,7 @@ function init(){
       $('moveCount').textContent = 0;
       updateGameStateUI();
       updateRefBoardUI();
+      saveSettings();
       toast(`空の盤面を記録しました（基準輝度 ${Math.round(refMedian)}）`);
     };
     if(stoneCount > 0){
@@ -3379,6 +3403,7 @@ function init(){
     $('moveCount').textContent = 0;
     updateGameStateUI();
     updateRefBoardUI();
+    saveSettings();
     toast('基準をクリア - 自動の局所基準で判定します');
   });
   // All inline dialogs below replace native confirm()/prompt() because those
@@ -3448,6 +3473,7 @@ function init(){
           }
           S.stoneCalib = { size: N, blackV: bV, whiteV: wV, blackS: bS, whiteS: wS, ts: Date.now() };
           updateStoneCalibUI();
+          saveSettings();
           toast(`見本を記録（黒V=${bV.toFixed(0)} / 白V=${wV.toFixed(0)}）`);
           // Step 3: ask to remove stones, then snap the detection state.
           showCalibPrompt(
@@ -3499,6 +3525,7 @@ function init(){
     $('moveCount').textContent = 0;
     updateGameStateUI();
     updateStoneCalibUI();
+    saveSettings();
     toast('黒白の見本をクリアしました');
   });
   $('btnSGF').addEventListener('click', generateSGF);
