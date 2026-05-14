@@ -1722,12 +1722,18 @@ function detectFrame(){
   }
   const ref = (woodVals.length >= Math.ceil(N*N * 0.1))
     ? median(woodVals) : median(Array.from(Vs));
-  // A real white stone is nearly grayscale, but warm indoor lighting (LED /
-  // incandescent) tints it noticeably yellow, pushing saturation well past
-  // 0.3. We still want to reject strongly coloured glare, so the gate sits at
-  // 0.45 — generous enough for warm-lit white stones, since the brightness
-  // test (v > ref + whiteTh) already excludes the board wood itself.
-  const W_SAT_MAX = 0.45;
+  // Adaptive white saturation gate: the board's own ambient saturation (mean
+  // of empty-cell Ss values) sets the baseline. Under warm LED/incandescent
+  // light the wood itself has sRef ≈ 0.30-0.40, so white stones (also warmed)
+  // need a higher ceiling. We add +0.20 and clamp to [0.45, 0.60].
+  // Normal board (sRef≈0.20) → 0.45; warm board (sRef≈0.35) → 0.55.
+  let _sRefSum = 0, _sRefCnt = 0;
+  if(S.committed && S.committed.length === N){
+    for(let i=0;i<N;i++) for(let j=0;j<N;j++)
+      if(S.committed[i][j] === '.'){ _sRefSum += Ss[i*N+j]; _sRefCnt++; }
+  }
+  const _sRef = _sRefCnt >= Math.ceil(N*N * 0.1) ? _sRefSum / _sRefCnt : 0.25;
+  const W_SAT_MAX = Math.max(0.45, Math.min(0.60, _sRef + 0.20));
   // If we have a recorded empty-board reference for the current board size,
   // use it directly as the per-cell baseline. This handles wood-grain knots,
   // persistent shadows, and bowl/lid placement under the camera much better
