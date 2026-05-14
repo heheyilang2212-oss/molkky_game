@@ -1865,7 +1865,13 @@ function detectFrame(){
     // Passes don't change stone counts but do advance the turn, so factor them in.
     const bPasses = S.movesInitialized ? (S.moves||[]).filter(m=>m.c==='B'&&m.x==null).length : 0;
     const wPasses = S.movesInitialized ? (S.moves||[]).filter(m=>m.c==='W'&&m.x==null).length : 0;
-    S.turn = (bc + bPasses <= wc + wPasses) ? 'B' : 'W';
+    // Handicap stones (H>=2) belong to Black's initial setup; White plays first in the game.
+    // Subtract them so the effective Black move count starts at 0 after placement.
+    const handi = (typeof S.handicap === 'number' && S.handicap >= 2) ? S.handicap : 0;
+    const adjBc = bc - handi + bPasses;
+    S.turn = handi > 0
+      ? (adjBc < wc + wPasses ? 'B' : 'W')   // handicap: White goes first → strict <
+      : (adjBc <= wc + wPasses ? 'B' : 'W');  // normal: Black goes first → <=
   }
   $('turnInd').innerHTML = '手番: <b>' + (S.turn==='B' ? '黒●' : '白○') + '</b>';
   // Stability indicator
@@ -3564,6 +3570,7 @@ function init(){
     renderViewerBoard();
   });
   $('vFwd').addEventListener('click', ()=>{
+    viewerStopPlayback();
     const total = viewerTotalMoves();
     S.vViewIndex = Math.min(total, S.vViewIndex + 1);
     S.vAtLive = (S.vViewIndex === total);
