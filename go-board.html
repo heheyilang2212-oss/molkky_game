@@ -1716,10 +1716,17 @@ function detectFrame(){
   // to drift and accuracy to degrade. S.committed holds the last confirmed state,
   // so empty cells there are reliable wood samples. Fall back to all cells only
   // when committed is unavailable or the board is extremely crowded (<10% empty).
+  // Single pass over committed-empty cells: collect both brightness (woodVals)
+  // and saturation (_sRefSum/_sRefCnt) to avoid iterating the committed grid twice.
   const woodVals = [];
+  let _sRefSum = 0, _sRefCnt = 0;
   if(S.committed && S.committed.length === N){
-    for(let i=0;i<N;i++) for(let j=0;j<N;j++)
-      if(S.committed[i][j] === '.') woodVals.push(Vs[i*N + j]);
+    for(let i=0;i<N;i++) for(let j=0;j<N;j++){
+      if(S.committed[i][j] === '.'){
+        woodVals.push(Vs[i*N + j]);
+        _sRefSum += Ss[i*N+j]; _sRefCnt++;
+      }
+    }
   }
   // Cache last good ref (computed from enough empty cells) so dense endgame
   // boards don't fall back to median(all cells) which is dominated by stones.
@@ -1737,11 +1744,6 @@ function detectFrame(){
   // light the wood itself has sRef ≈ 0.30-0.40, so white stones (also warmed)
   // need a higher ceiling. We add +0.20 and clamp to [0.45, 0.60].
   // Normal board (sRef≈0.20) → 0.45; warm board (sRef≈0.35) → 0.55.
-  let _sRefSum = 0, _sRefCnt = 0;
-  if(S.committed && S.committed.length === N){
-    for(let i=0;i<N;i++) for(let j=0;j<N;j++)
-      if(S.committed[i][j] === '.'){ _sRefSum += Ss[i*N+j]; _sRefCnt++; }
-  }
   const _sRef = _sRefCnt >= Math.ceil(N*N * 0.1) ? _sRefSum / _sRefCnt : 0.25;
   const W_SAT_MAX = Math.max(0.45, Math.min(0.60, _sRef + 0.20));
   // If we have a recorded empty-board reference for the current board size,
@@ -2290,6 +2292,7 @@ function attachBoardEdit(){
     drawBoardCanvas('boardB');
     drawOverlay();
     broadcastState();
+    saveGameSnapshot();
   });
 }
 
@@ -3012,6 +3015,9 @@ function setActiveSize(n){
 }
 function changeSize(n){
   if(n === S.size) return;
+  archiveCurrentGame();
+  clearGameSnapshot();
+  renderArchivePanel();
   S.size = n;
   initDetectionState();
   S.moves = [];
@@ -3205,6 +3211,9 @@ function init(){
     saveGameSnapshot();
   });
   $('btnReset').addEventListener('click', ()=>{
+    archiveCurrentGame();
+    clearGameSnapshot();
+    renderArchivePanel();
     S.corners = defaultCorners();
     initDetectionState();
     S.movesInitialized = false;
@@ -3223,6 +3232,9 @@ function init(){
   });
   $('btnRotate').addEventListener('click', ()=>{
     if(!S.corners) return;
+    archiveCurrentGame();
+    clearGameSnapshot();
+    renderArchivePanel();
     // Rotate corner labels 90° CW: TL←BL, TR←TL, BR←TR, BL←BR
     S.corners = [S.corners[3], S.corners[0], S.corners[1], S.corners[2]];
     S.boardRotation = (S.boardRotation + 1) & 3;
@@ -3290,6 +3302,9 @@ function init(){
     });
   });
   $('btnRecalib').addEventListener('click', ()=>{
+    archiveCurrentGame();
+    clearGameSnapshot();
+    renderArchivePanel();
     initDetectionState();
     S.movesInitialized = false;
     S.initialPosition = null;
@@ -3323,6 +3338,9 @@ function init(){
         toast('⚠ 画面が明るすぎます（白飛び）。照明を調整してから再度記録してください。', true);
         return;
       }
+      archiveCurrentGame();
+      clearGameSnapshot();
+      renderArchivePanel();
       S.refBoard = {
         size: S.size,
         V: new Float32Array(S._lastVs),
@@ -3349,6 +3367,9 @@ function init(){
     }
   });
   $('btnClearRef').addEventListener('click', ()=>{
+    archiveCurrentGame();
+    clearGameSnapshot();
+    renderArchivePanel();
     S.refBoard = null;
     initDetectionState();
     S.gameStarted = false;
@@ -3436,6 +3457,9 @@ function init(){
             '<span style="color:#aaa;font-size:.78rem">（OK で盤面をリセットして、取り除いた状態から認識を開始します）</span></span>',
             ()=>{
               S.showCalibGuide = false;
+              archiveCurrentGame();
+              clearGameSnapshot();
+              renderArchivePanel();
               initDetectionState();
               S.gameStarted = false;
               S.moves = [];
@@ -3463,6 +3487,9 @@ function init(){
       );
   });
   $('btnClearCalib').addEventListener('click', ()=>{
+    archiveCurrentGame();
+    clearGameSnapshot();
+    renderArchivePanel();
     S.stoneCalib = null;
     initDetectionState();
     S.gameStarted = false;
@@ -3496,6 +3523,9 @@ function init(){
       S.history[m.x][m.y] = Array.from({length:S.histDepth}, ()=>'.');
       S.prevCommitted[m.x][m.y] = '.';
     }
+    // When autoTurn is off, turn is not recalculated from stone counts, so we
+    // restore it to the color that made the undone move (they play again).
+    if(!S.autoTurn) S.turn = m.c;
     $('moveCount').textContent = S.moves.length;
     drawBoardCanvas('boardB');
     drawOverlay();
