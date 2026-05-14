@@ -654,7 +654,9 @@ function renderChat(){
       const color = m.mine ? '#7cffa7' : '#f4d03f';
       return `<div><span style="color:${color}">${nm}</span> <span style="color:#666">${t}</span><br><span style="color:#eee">${tx}</span></div>`;
     }).join('');
-    el.scrollTop = el.scrollHeight;
+    // Only auto-scroll if the user is already near the bottom (within 60px).
+    // This avoids hijacking the scroll position if the user is reading old messages.
+    if(el.scrollHeight - el.scrollTop - el.clientHeight < 60) el.scrollTop = el.scrollHeight;
   }
   const cnt = (S.chat || []).length;
   if($('bChatCount')) $('bChatCount').textContent = '(' + cnt + ')';
@@ -1034,6 +1036,16 @@ async function startCamera(){
   // After permission we get labels
   await listCameras();
   resizeOverlay();
+  // Show/hide zoom controls depending on whether hardware zoom is available.
+  // CSS fallback (scale transform) is always possible, so always show them,
+  // but mark the label to indicate CSS-only mode so users know the quality impact.
+  try{
+    const track = S.stream && S.stream.getVideoTracks()[0];
+    const caps = (track && track.getCapabilities) ? track.getCapabilities() : {};
+    const hasHwZoom = !!(caps.zoom && caps.zoom.max > caps.zoom.min);
+    const zLabel = $('zoomLabel');
+    if(zLabel) zLabel.title = hasHwZoom ? 'ハードウェアズーム' : 'ソフトウェアズーム（画質低下あり）';
+  }catch(e){}
 }
 function stopCamera(){
   if(S.stream){
@@ -1752,13 +1764,25 @@ function detectFrame(){
             }
           }
         }
-        // Fallback: cells classified empty in pass-1 (catches newly emptied cells)
+        // Fallback 1: cells classified empty in pass-1 (catches newly emptied cells)
         if(tmp.length < 4){
           for(let di=-radius; di<=radius; di++){
             const ni = i+di; if(ni<0||ni>=N) continue;
             for(let dj=-radius; dj<=radius; dj++){
               const nj = j+dj; if(nj<0||nj>=N) continue;
               if(cls1[ni][nj] === '.') tmp.push(Vs[ni*N + nj]);
+            }
+          }
+        }
+        // Fallback 2: wider radius search (dense stone regions exhaust r=2)
+        if(tmp.length < 4){
+          const r2 = Math.min(N-1, radius + 2);
+          for(let di=-r2; di<=r2; di++){
+            const ni = i+di; if(ni<0||ni>=N) continue;
+            for(let dj=-r2; dj<=r2; dj++){
+              const nj = j+dj; if(nj<0||nj>=N) continue;
+              if(cls1[ni][nj] === '.' || (hasCommitted && S.committed[ni][nj] === '.'))
+                tmp.push(Vs[ni*N + nj]);
             }
           }
         }
@@ -1888,7 +1912,9 @@ function trackMoves(){
       // misdetection flicker, NOT a real capture (in Go, captures only happen
       // when a stone is placed). Keep prevCommitted unchanged so that when
       // the stone reappears it is NOT counted as a new move.
-      S.suspiciousFrames += removals;
+      // Count FRAMES (not stones) so a large legitimate capture that spans
+      // two detection frames doesn't prematurely fire the stale toast.
+      S.suspiciousFrames++;
       if(S.suspiciousFrames > 40){
         syncPrevToCommitted();
         S.suspiciousFrames = 0;
@@ -2286,7 +2312,7 @@ function startPeerHost(forceNewId){
   }
   const id = PEER_PREFIX + shortId;
   setLiveBadge('connecting');
-  S.peer = new Peer(id, { debug: 1, config: ICE_CONFIG });
+  S.peer = new Peer(id, { debug: 0, config: ICE_CONFIG });
   S.peer.on('open', (pid)=>{
     S.peerId = pid;
     const shortId = pid.replace(PEER_PREFIX, '');
@@ -2429,7 +2455,7 @@ function startPeerViewer(shortId){
   setVStatus('接続中...', 'connecting');
   if(S.conn){ try{ S.conn.close(); }catch(e){} S.conn = null; }
   if(S.peer){ try{ S.peer.destroy(); }catch(e){} S.peer = null; }
-  S.peer = new Peer({ debug: 1, config: ICE_CONFIG });
+  S.peer = new Peer({ debug: 0, config: ICE_CONFIG });
   // Only call connectToHost on the FIRST 'open'. Subsequent 'open' events come
   // from peer.reconnect() after a signaling-server hiccup — calling connectToHost
   // again would tear down a healthy DataConnection and create a duplicate one,
@@ -2629,16 +2655,27 @@ function connectToHost(shortId){
   S.conn = conn;
   // Timeout: if WebRTC ICE negotiation takes too long (e.g. strict NAT without TURN),
   // conn.on('open') never fires. Detect and retry.
+  // Show a live countdown so users know the app is still working.
+  const ICE_TIMEOUT = 18000;
+  const iceStart = Date.now();
+  const iceCountdown = setInterval(()=>{
+    if(conn.open){ clearInterval(iceCountdown); return; }
+    const elapsed = Date.now() - iceStart;
+    const remaining = Math.max(0, Math.ceil((ICE_TIMEOUT - elapsed) / 1000));
+    setVStatus(`接続中...（経路を探しています ${remaining}s）`, 'connecting');
+  }, 1000);
   const connTimeout = setTimeout(()=>{
+    clearInterval(iceCountdown);
     if(!conn.open){
       setVStatus('接続タイムアウト（NAT越えに失敗の可能性）- 再試行します...', 'disconnected');
       try{ conn.close(); }catch(e){}
       showReconnectBtn(shortId);
       scheduleReconnect(shortId);
     }
-  }, 18000);
+  }, ICE_TIMEOUT);
   conn.on('open', ()=>{
     clearTimeout(connTimeout);
+    clearInterval(iceCountdown);
     _reconnectAttempts = 0;
     hideReconnectBtn();
     setVStatus('接続済み', 'connected');
@@ -2664,13 +2701,13 @@ function connectToHost(shortId){
     }
   });
   conn.on('close', ()=>{
-    clearTimeout(connTimeout);
+    clearTimeout(connTimeout); clearInterval(iceCountdown);
     setVStatus('切断されました - 再接続します...', 'disconnected');
     showReconnectBtn(shortId);
     scheduleReconnect(shortId);
   });
   conn.on('error', (e)=>{
-    clearTimeout(connTimeout);
+    clearTimeout(connTimeout); clearInterval(iceCountdown);
     setVStatus('接続エラー - 再接続します...', 'disconnected');
     showReconnectBtn(shortId);
     scheduleReconnect(shortId);
@@ -3025,6 +3062,7 @@ function init(){
   });
   $('dbgOverlay').addEventListener('change', e=>{ S.dbgOverlay = e.target.checked; saveSettings(); drawOverlay(); });
   $('calibMode').addEventListener('change', e=>{
+    if(!['free','square','trapezoid'].includes(e.target.value)) return;
     S.calibMode = e.target.value;
     if(S.calibMode === 'square'){
       fitSquareToCorners();
@@ -3179,6 +3217,20 @@ function init(){
     let stoneCount = 0;
     for(const row of S.committed) for(const c of row) if(c !== '.') stoneCount++;
     const doCapture = ()=>{
+      // Sanity-check: warn if the board appears very dark (lens cover?) or
+      // overexposed (strong glare), as this would produce a useless reference.
+      const refMedian = S._lastVs ? (()=>{
+        const sorted = Array.from(S._lastVs).sort((a,b)=>a-b);
+        return sorted[sorted.length >> 1];
+      })() : 128;
+      if(refMedian < 20){
+        toast('⚠ 画面が暗すぎます。カメラのレンズや露出を確認してから再度記録してください。', true);
+        return;
+      }
+      if(refMedian > 240){
+        toast('⚠ 画面が明るすぎます（白飛び）。照明を調整してから再度記録してください。', true);
+        return;
+      }
       S.refBoard = {
         size: S.size,
         V: new Float32Array(S._lastVs),
@@ -3193,7 +3245,7 @@ function init(){
       $('moveCount').textContent = 0;
       updateGameStateUI();
       updateRefBoardUI();
-      toast('空の盤面を記録しました - これを基準に判定します');
+      toast(`空の盤面を記録しました（基準輝度 ${Math.round(refMedian)}）`);
     };
     if(stoneCount > 0){
       showCalibPrompt(
@@ -3337,7 +3389,7 @@ function init(){
       if(!blob){ toast('PNG生成に失敗', true); return; }
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
-      const stamp = new Date().toISOString().slice(0,19).replace(/[:T]/g,'');
+      const stamp = new Date().toISOString().slice(0,19).replace('T','_').replace(/:/g,'');
       a.href = url; a.download = 'goboard_' + stamp + '.png';
       document.body.appendChild(a); a.click(); a.remove();
       setTimeout(()=>URL.revokeObjectURL(url), 1000);
@@ -3541,10 +3593,15 @@ function init(){
   attachOverlayInput();
   attachBoardEdit();
 
-  // Render loop for overlay (decoupled from detection so handles look smooth)
-  function ovLoop(){
-    if(S.mode === 'broadcast') drawOverlay();
+  // Render loop for overlay — capped at ~15 fps to avoid burning mobile CPU/GPU.
+  // Corner handles only move on user interaction, so 15 fps is imperceptible.
+  let _ovLastT = 0;
+  function ovLoop(t){
     requestAnimationFrame(ovLoop);
+    if(S.mode !== 'broadcast') return;
+    if(t - _ovLastT < 64) return; // ~15 fps cap
+    _ovLastT = t;
+    drawOverlay();
   }
   requestAnimationFrame(ovLoop);
 
