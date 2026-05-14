@@ -3184,6 +3184,11 @@ function init(){
   });
   $('btnStart').addEventListener('click', ()=>{
     if(!S.committed){ toast('まだ盤面が認識されていません', true); return; }
+    // Warn if the detection is currently unstable (might capture wrong initial position)
+    if(S.consecutiveRejects > 5){
+      toast('⚠ 認識が不安定です。「安定」になってから開始してください', true);
+      return;
+    }
     S.initialPosition = snapshotCommitted();
     syncPrevToCommitted();
     S.movesInitialized = true;
