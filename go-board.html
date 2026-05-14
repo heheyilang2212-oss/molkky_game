@@ -629,8 +629,15 @@ function escapeHtml(s){
 // ============================================================
 // CHAT
 // ============================================================
+function genChatId(){
+  return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+}
 function appendChat(msg){
   if(!S.chat) S.chat = [];
+  // Deduplicate by id: a reconnect can leave a stale DataConnection on the
+  // broadcaster, which then echoes a viewer's own message back to it (or to
+  // other viewers twice). Dropping already-seen ids makes that harmless.
+  if(msg.id && S.chat.some(m => m.id === msg.id)) return;
   S.chat.push(msg);
   while(S.chat.length > 100) S.chat.shift();
   renderChat();
@@ -654,16 +661,18 @@ function renderChat(){
   if($('vChatCount')) $('vChatCount').textContent = '(' + cnt + ')';
 }
 function broadcasterSendChat(text){
-  const msg = { type: 'chat', name: (S.gameName || 'ホスト') || 'ホスト', text: text, ts: Date.now() };
-  appendChat({ name: msg.name, text: msg.text, ts: msg.ts, mine: true });
+  const id = genChatId();
+  const msg = { type: 'chat', id, name: (S.gameName || 'ホスト') || 'ホスト', text: text, ts: Date.now() };
+  appendChat({ id, name: msg.name, text: msg.text, ts: msg.ts, mine: true });
   for(const c of (S.conns || [])){
     try{ c.send(msg); }catch(e){}
   }
 }
 function broadcasterRelayChat(from, msg){
   // Echo to other viewers + append locally
-  const out = { type: 'chat', name: msg.name || '(匿名)', text: msg.text, ts: msg.ts || Date.now() };
-  appendChat({ name: out.name, text: out.text, ts: out.ts, mine: false });
+  const id = msg.id || genChatId();
+  const out = { type: 'chat', id, name: msg.name || '(匿名)', text: msg.text, ts: msg.ts || Date.now() };
+  appendChat({ id, name: out.name, text: out.text, ts: out.ts, mine: false });
   for(const c of (S.conns || [])){
     if(c === from) continue;
     try{ c.send(out); }catch(e){}
@@ -671,8 +680,9 @@ function broadcasterRelayChat(from, msg){
 }
 function viewerSendChat(text){
   if(!S.conn || !S.conn.open) { toast('未接続です', true); return; }
-  const msg = { type: 'chat', name: (S.viewerName || '').trim() || '(匿名)', text: text, ts: Date.now() };
-  appendChat({ name: msg.name, text: msg.text, ts: msg.ts, mine: true });
+  const id = genChatId();
+  const msg = { type: 'chat', id, name: (S.viewerName || '').trim() || '(匿名)', text: text, ts: Date.now() };
+  appendChat({ id, name: msg.name, text: msg.text, ts: msg.ts, mine: true });
   try{ S.conn.send(msg); }catch(e){}
 }
 // ============================================================
@@ -1646,11 +1656,12 @@ function detectFrame(){
   // Most points are empty (= wood) for typical positions, so median ≈ wood V.
   const Vall = Array.from(Vs);
   const ref = median(Vall);
-  // A real white stone is nearly grayscale (low saturation). Light reflections
-  // and yellow/warm glares often have high saturation, so we reject them as
-  // "white" candidates here. The board wood itself is moderately saturated
-  // (~0.3-0.5 brown), so this also helps avoid calling bright wood "W".
-  const W_SAT_MAX = 0.30;
+  // A real white stone is nearly grayscale, but warm indoor lighting (LED /
+  // incandescent) tints it noticeably yellow, pushing saturation well past
+  // 0.3. We still want to reject strongly coloured glare, so the gate sits at
+  // 0.45 — generous enough for warm-lit white stones, since the brightness
+  // test (v > ref + whiteTh) already excludes the board wood itself.
+  const W_SAT_MAX = 0.45;
   // If we have a recorded empty-board reference for the current board size,
   // use it directly as the per-cell baseline. This handles wood-grain knots,
   // persistent shadows, and bowl/lid placement under the camera much better
@@ -2291,7 +2302,7 @@ function startPeerHost(forceNewId){
         if(!text) return;
         const meta = S.connInfo && S.connInfo.get(conn);
         const name = (data.name && data.name.trim()) || (meta && meta.name) || '(匿名)';
-        broadcasterRelayChat(conn, { name, text, ts: data.ts || Date.now() });
+        broadcasterRelayChat(conn, { id: data.id, name, text, ts: data.ts || Date.now() });
       }
     });
     const handleGone = ()=>{
@@ -2614,7 +2625,7 @@ function connectToHost(shortId){
     } else if(data.type === 'chat'){
       const text = (typeof data.text === 'string') ? data.text.slice(0, 300) : '';
       if(!text) return;
-      appendChat({ name: data.name || '(匿名)', text, ts: data.ts || Date.now(), mine: false });
+      appendChat({ id: data.id, name: data.name || '(匿名)', text, ts: data.ts || Date.now(), mine: false });
     }
   });
   conn.on('close', ()=>{
