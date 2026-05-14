@@ -1531,6 +1531,7 @@ function initDetectionState(){
   S.lastMotionTime = 0;
   S._wasSettled = false;
   S.motionLevel = 0;
+  S._lastGoodRef = undefined;
 }
 function pushHistory(i, j, val){
   const buf = S.history[i][j];
@@ -1720,8 +1721,17 @@ function detectFrame(){
     for(let i=0;i<N;i++) for(let j=0;j<N;j++)
       if(S.committed[i][j] === '.') woodVals.push(Vs[i*N + j]);
   }
-  const ref = (woodVals.length >= Math.ceil(N*N * 0.1))
-    ? median(woodVals) : median(Array.from(Vs));
+  // Cache last good ref (computed from enough empty cells) so dense endgame
+  // boards don't fall back to median(all cells) which is dominated by stones.
+  let ref;
+  if(woodVals.length >= Math.ceil(N*N * 0.1)){
+    ref = median(woodVals);
+    S._lastGoodRef = ref;
+  } else if(S._lastGoodRef !== undefined){
+    ref = S._lastGoodRef;
+  } else {
+    ref = median(Array.from(Vs));
+  }
   // Adaptive white saturation gate: the board's own ambient saturation (mean
   // of empty-cell Ss values) sets the baseline. Under warm LED/incandescent
   // light the wood itself has sRef ≈ 0.30-0.40, so white stones (also warmed)
