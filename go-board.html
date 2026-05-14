@@ -270,9 +270,9 @@ a{color:#7cb7ff}
           <input type="range" id="blackTh" min="10" max="120" value="55">
         </div>
         <div class="sRow">
-          <div class="sHead">白の判定の厳しさ <span class="v" id="whiteVal">30</span></div>
+          <div class="sHead">白の判定の厳しさ <span class="v" id="whiteVal">22</span></div>
           <div style="font-size:.7rem;color:#aaa;margin-bottom:4px">大きい=より明るい時だけ白と判定（光の反射に強い）／小さい=白と認めやすい</div>
-          <input type="range" id="whiteTh" min="5" max="120" value="30">
+          <input type="range" id="whiteTh" min="5" max="120" value="22">
         </div>
         <div class="sRow">
           <div class="sHead">安定化フレーム数 <span class="v" id="histVal">10</span></div>
@@ -505,7 +505,7 @@ const S = {
   prevCommitted: null,     // for diffing
   // Settings
   blackTh: 55,
-  whiteTh: 30,
+  whiteTh: 22,
   histDepth: 10,
   targetFps: 8,
   dbgOverlay: false,
@@ -1482,13 +1482,6 @@ function pushHistory(i, j, val){
 }
 function commitFromHistory(){
   const N = S.size, K = S.histDepth;
-  // Normal vote threshold (70%). Used when adding a stone or keeping the same
-  // class. Reverting an already-committed stone back to empty (or flipping
-  // between black and white) requires a stronger majority (90%): this makes
-  // brief noise — a momentary flicker from a glare or partial occlusion —
-  // unable to wipe out a stone that has been stable for a while.
-  const minVotes = Math.max(2, Math.ceil(K * 0.7));
-  const strongVotes = Math.max(2, Math.ceil(K * 0.9));
   for(let i=0;i<N;i++){
     for(let j=0;j<N;j++){
       const buf = S.history[i][j];
@@ -1501,8 +1494,15 @@ function commitFromHistory(){
       const top = Math.max(cB, cW, cE);
       const candidate = (top===cB)?'B':(top===cW)?'W':'.';
       const cur = S.committed[i][j];
-      const needed = (cur === '.' || cur === candidate) ? minVotes : strongVotes;
-      if(top >= Math.min(needed, buf.length)){
+      // Placing or keeping a stone: 65% of the current buffer length.
+      // Using buf.length instead of K means the threshold scales from the
+      // first frame so early frames don't require 100% consistency.
+      // Removing a committed stone requires 90%: protects against transient
+      // glare / occlusion wiping a stone that has been stable for a while.
+      const required = (cur === '.' || cur === candidate)
+        ? Math.max(2, Math.round(buf.length * 0.65))
+        : Math.max(2, Math.round(buf.length * 0.90));
+      if(top >= required){
         S.committed[i][j] = candidate;
       }
     }
@@ -1872,7 +1872,7 @@ function trackMoves(){
   }
   // Diff prev → current
   const newOnes = [];
-  let bDelta = 0, wDelta = 0;
+  let bDelta = 0, wDelta = 0, removals = 0;
   for(let i=0;i<N;i++) for(let j=0;j<N;j++){
     const a = S.prevCommitted[i][j], b = S.committed[i][j];
     if(a === b) continue;
@@ -1880,11 +1880,24 @@ function trackMoves(){
     else if(a === '.' && b === 'W'){ newOnes.push({c:'W',x:i,y:j}); wDelta++; }
     else if(a === 'B' && b === 'W'){ newOnes.push({c:'W',x:i,y:j}); wDelta++; }
     else if(a === 'W' && b === 'B'){ newOnes.push({c:'B',x:i,y:j}); bDelta++; }
-    // a !== '.' && b === '.' — removed (capture). No move recorded for it.
+    else if(a !== '.' && b === '.') removals++;
   }
   if(newOnes.length === 0){
-    syncPrevToCommitted();
-    S.suspiciousFrames = 0;
+    if(removals > 0){
+      // Stones disappeared with no new placement — almost certainly a
+      // misdetection flicker, NOT a real capture (in Go, captures only happen
+      // when a stone is placed). Keep prevCommitted unchanged so that when
+      // the stone reappears it is NOT counted as a new move.
+      S.suspiciousFrames += removals;
+      if(S.suspiciousFrames > 40){
+        syncPrevToCommitted();
+        S.suspiciousFrames = 0;
+        toast('認識が不安定です。基準位置を再同期しました', true);
+      }
+    } else {
+      syncPrevToCommitted();
+      S.suspiciousFrames = 0;
+    }
     return;
   }
   // Allow several simultaneous changes per frame: when the broadcaster freezes
