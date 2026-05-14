@@ -1764,23 +1764,27 @@ function detectFrame(){
             }
           }
         }
-        // Fallback 1: cells classified empty in pass-1 (catches newly emptied cells)
+        // Fallback 1: cells classified empty in pass-1 (catches newly emptied cells).
+        // Skip cells already counted from committed above to avoid double-weighting.
         if(tmp.length < 4){
           for(let di=-radius; di<=radius; di++){
             const ni = i+di; if(ni<0||ni>=N) continue;
             for(let dj=-radius; dj<=radius; dj++){
               const nj = j+dj; if(nj<0||nj>=N) continue;
+              if(hasCommitted && S.committed[ni][nj] === '.') continue; // already in primary
               if(cls1[ni][nj] === '.') tmp.push(Vs[ni*N + nj]);
             }
           }
         }
-        // Fallback 2: wider radius search (dense stone regions exhaust r=2)
+        // Fallback 2: wider radius search (dense stone regions exhaust r=2).
+        // Only add cells outside the already-searched r=2 area.
         if(tmp.length < 4){
           const r2 = Math.min(N-1, radius + 2);
           for(let di=-r2; di<=r2; di++){
             const ni = i+di; if(ni<0||ni>=N) continue;
             for(let dj=-r2; dj<=r2; dj++){
               const nj = j+dj; if(nj<0||nj>=N) continue;
+              if(Math.abs(di) <= radius && Math.abs(dj) <= radius) continue; // already covered
               if(cls1[ni][nj] === '.' || (hasCommitted && S.committed[ni][nj] === '.'))
                 tmp.push(Vs[ni*N + nj]);
             }
@@ -1836,10 +1840,14 @@ function detectFrame(){
   } else {
     S.consecutiveRejects++;
     if(S.consecutiveRejects > 25){
-      // Long sustained difference — assume scene actually changed.
+      // Long sustained difference — assume scene actually changed. Snap history
+      // so committed state reflects the new scene immediately rather than
+      // slowly bleeding in via voting.
       S.lastAcceptedClass = cls;
       S.consecutiveRejects = 0;
-      for(let i=0;i<N;i++) for(let j=0;j<N;j++) pushHistory(i, j, cls[i][j]);
+      for(let i=0;i<N;i++) for(let j=0;j<N;j++){
+        S.history[i][j] = Array.from({length: S.histDepth}, ()=>cls[i][j]);
+      }
     }
   }
   commitFromHistory();
@@ -1854,7 +1862,10 @@ function detectFrame(){
   $('bCount').textContent = bc;
   $('wCount').textContent = wc;
   if(S.autoTurn){
-    S.turn = (bc <= wc) ? 'B' : 'W';
+    // Passes don't change stone counts but do advance the turn, so factor them in.
+    const bPasses = S.movesInitialized ? (S.moves||[]).filter(m=>m.c==='B'&&m.x==null).length : 0;
+    const wPasses = S.movesInitialized ? (S.moves||[]).filter(m=>m.c==='W'&&m.x==null).length : 0;
+    S.turn = (bc + bPasses <= wc + wPasses) ? 'B' : 'W';
   }
   $('turnInd').innerHTML = '手番: <b>' + (S.turn==='B' ? '黒●' : '白○') + '</b>';
   // Stability indicator
@@ -2382,7 +2393,9 @@ function startPeerHost(forceNewId){
         }
         const timer = setTimeout(()=>{
           if(S._pendingDeparts) S._pendingDeparts.delete(name);
-          toast('👁 ' + name + ' さんが退室しました');
+          // Only show if they haven't reconnected under the same name
+          const stillPresent = S.connInfo && [...S.connInfo.values()].some(m => m.name === name && m.announced);
+          if(!stillPresent) toast('👁 ' + name + ' さんが退室しました');
         }, 10000);
         S._pendingDeparts.set(name, timer);
       }
@@ -2608,7 +2621,8 @@ function renderViewerBoard(){
   }
   const sl = $('vSlider');
   if(+sl.max !== total) sl.max = total;
-  if(+sl.value !== idx) sl.value = idx;
+  // Don't overwrite slider while user is dragging it
+  if(+sl.value !== idx && document.activeElement !== sl) sl.value = idx;
   // Turn indicator reflects the position being shown
   if(lastMove){
     const nextTurn = lastMove.c === 'B' ? 'W' : 'B';
@@ -2895,6 +2909,7 @@ function exitBroadcast(){
   if(S.peer){ try{ S.peer.destroy(); }catch(e){} S.peer = null; }
   S.conns = [];
   S.connInfo = null;
+  if(S._pendingDeparts){ S._pendingDeparts.forEach(t=>clearTimeout(t)); S._pendingDeparts = null; }
   showScreen('modeSelect');
 }
 function enterView(shortId){
@@ -2910,6 +2925,7 @@ function enterView(shortId){
   $('vSlider').max = 0; $('vSlider').value = 0;
   $('vMoveLabel').textContent = '0';
   $('vMoveTotal').textContent = '0';
+  _reconnectAttempts = 0; // reset backoff on fresh view entry
   startPeerViewer(shortId);
   drawBoardCanvas('boardV', { size: S.size, committed: null });
 }
@@ -3185,6 +3201,7 @@ function init(){
       S.movesInitialized = true;
       S.moves = [];
       S.suspiciousFrames = 0;
+      S.lastMotionTime = 0;
       S.gameStarted = true;
       S.result = '';
       $('result').value = '';
