@@ -357,6 +357,10 @@ a{color:#7cb7ff}
         <button id="bChatSend" style="padding:6px 14px;border-radius:6px;background:rgba(244,208,63,.2);color:#f4d03f;border:1px solid rgba(244,208,63,.4)">送信</button>
       </div>
     </details>
+    <details class="settings" style="margin-top:8px">
+      <summary>📂 過去の棋譜 <span id="archiveCount" style="color:#888;font-size:.72rem"></span></summary>
+      <div id="archiveList" style="font-size:.8rem;color:#ddd;max-height:240px;overflow-y:auto;margin-top:6px"></div>
+    </details>
   </div>
 </section>
 
@@ -853,6 +857,44 @@ function updateStoneCalibUI(){
     cap.style.borderColor = '';
     clr.style.display = 'none';
   }
+}
+function renderArchivePanel(){
+  const list = document.getElementById('archiveList');
+  const cnt = document.getElementById('archiveCount');
+  if(!list) return;
+  let archives = [];
+  try{ archives = JSON.parse(localStorage.getItem(ARCHIVED_GAMES_KEY) || '[]'); }catch(e){}
+  if(cnt) cnt.textContent = archives.length ? '(' + archives.length + ')' : '';
+  if(!archives.length){
+    list.innerHTML = '<em style="color:#666">まだアーカイブがありません</em>';
+    return;
+  }
+  list.innerHTML = archives.map((g, idx) => {
+    const d = new Date(g.ts || 0);
+    const dStr = d.toLocaleDateString('ja-JP') + ' ' + d.toLocaleTimeString('ja-JP').slice(0,5);
+    const bName = escapeHtml((g.blackName || '黒').slice(0, 20));
+    const wName = escapeHtml((g.whiteName || '白').slice(0, 20));
+    const gName = g.gameName ? (' 「' + escapeHtml(g.gameName.slice(0, 30)) + '」') : '';
+    const res = g.result ? (' <span style="color:#7cffa7">' + escapeHtml(g.result) + '</span>') : '';
+    return `<div style="display:flex;align-items:center;gap:6px;padding:5px 0;border-bottom:1px solid rgba(255,255,255,.08)">
+      <div style="flex:1;min-width:0">
+        <div style="color:#f4d03f;font-weight:600">${bName} vs ${wName}${gName}${res}</div>
+        <div style="color:#888;font-size:.75rem">${dStr} / ${g.moves || 0}手</div>
+      </div>
+      <button data-idx="${idx}" style="padding:4px 10px;border-radius:6px;background:rgba(244,208,63,.18);color:#f4d03f;border:1px solid rgba(244,208,63,.35);font-size:.75rem;white-space:nowrap">SGF</button>
+    </div>`;
+  }).join('');
+  list.querySelectorAll('button[data-idx]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const idx = +btn.dataset.idx;
+      const g = archives[idx];
+      if(!g || !g.sgf) return;
+      const d = new Date(g.ts || 0);
+      const stamp = d.toISOString().slice(0,10);
+      downloadSGF(g.sgf, 'goboard_archive_' + stamp);
+      toast('アーカイブからSGFをダウンロード');
+    });
+  });
 }
 function updateGameStateUI(){
   const ind = document.getElementById('gameStateInd');
@@ -2820,6 +2862,7 @@ async function enterBroadcast(){
   updateRefBoardUI();
   updateStoneCalibUI();
   updateViewerListUI();
+  renderArchivePanel();
   // Sync UI to settings
   $('blackTh').value = S.blackTh; $('blackVal').textContent = S.blackTh;
   $('whiteTh').value = S.whiteTh; $('whiteVal').textContent = S.whiteTh;
@@ -2878,6 +2921,7 @@ async function enterBroadcast(){
                 list.unshift({ ts: saved.ts, moves: saved.moves.length, result: saved.result, blackName: saved.blackName, whiteName: saved.whiteName, gameName: saved.gameName, sgf });
                 while(list.length > 20) list.pop();
                 localStorage.setItem(ARCHIVED_GAMES_KEY, JSON.stringify(list));
+                renderArchivePanel();
               }catch(e){}
               clearGameSnapshot();
             }, null, '破棄する');
@@ -3210,6 +3254,7 @@ function init(){
     showCalibPrompt('現在の手数をリセットして、<br>いまの盤面を1手目の前として始め直しますか？', ()=>{
       // Archive the previous game before resetting
       archiveCurrentGame();
+      renderArchivePanel();
       S.initialPosition = snapshotCommitted();
       syncPrevToCommitted();
       S.movesInitialized = true;
@@ -3517,6 +3562,10 @@ function init(){
   }
   $('bChatSend').addEventListener('click', sendBChat);
   $('bChatInput').addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); sendBChat(); } });
+  // Archive panel: render lazily when opened
+  document.querySelectorAll('details').forEach(d=>{
+    d.addEventListener('toggle', ()=>{ if(d.open && d.querySelector('#archiveList')) renderArchivePanel(); });
+  });
   // Chat: viewer
   function sendVChat(){
     const v = $('vChatInput').value.trim();
