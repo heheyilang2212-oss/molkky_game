@@ -1132,6 +1132,24 @@ function stopCamera(){
   }
   if(S.videoEl) S.videoEl.srcObject = null;
 }
+
+// Keep the screen awake while broadcasting so a long game doesn't get
+// interrupted by the device dimming/locking. Browsers auto-release on
+// visibility change, so we re-request when the page becomes visible again.
+let _wakeLock = null;
+async function requestWakeLock(){
+  if(!('wakeLock' in navigator)) return;
+  try{
+    _wakeLock = await navigator.wakeLock.request('screen');
+    _wakeLock.addEventListener('release', ()=>{ _wakeLock = null; });
+  }catch(e){ /* permission denied, page hidden, etc. */ }
+}
+function releaseWakeLock(){
+  if(_wakeLock){ try{ _wakeLock.release(); }catch(e){} _wakeLock = null; }
+}
+document.addEventListener('visibilitychange', ()=>{
+  if(document.visibilityState === 'visible' && S.mode === 'broadcast') requestWakeLock();
+});
 async function applyZoom(delta){
   const newStep = Math.max(0, Math.min(10, S.zoomStep + delta));
   if(newStep === S.zoomStep) return;
@@ -2950,6 +2968,7 @@ async function enterBroadcast(){
     drawOverlay();
     startProcessingLoop();
     startPeerHost();
+    requestWakeLock();
     if(!localStorage.getItem('goboard.tutDone')){
       const tm = $('tutModal');
       if(tm){ tm.style.display = 'flex'; }
@@ -3018,6 +3037,7 @@ async function retryCamera(){
 function exitBroadcast(){
   stopProcessingLoop();
   stopCamera();
+  releaseWakeLock();
   if(S.peer){ try{ S.peer.destroy(); }catch(e){} S.peer = null; }
   S.conns = [];
   S.connInfo = null;
