@@ -348,6 +348,7 @@ a{color:#7cb7ff}
       <button id="btnPass">パス</button>
       <button id="btnResign">投了</button>
       <button id="btnEndGame" style="display:none">■ 終局（記録終了）</button>
+      <button id="btnResetAll" title="校正データ・対局状態・対局者情報・検出設定をすべて初期値に戻します（棋譜履歴は残ります）" style="background:rgba(255,80,80,.10);color:#ff9b9b;border:1px solid rgba(255,80,80,.30)">⟲ すべての設定を初期化</button>
       <button class="primary full" id="btnSGF">SGFをダウンロード</button>
     </div>
     <details class="settings" style="margin-top:8px" open>
@@ -599,7 +600,7 @@ const S = {
   //  'square'    = axis-aligned square (top-down shots; tweak size + position).
   //  'trapezoid' = left/right symmetric trapezoid (for side-on shots where the
   //                far edge looks shorter than the near edge).
-  calibMode: 'free',
+  calibMode: 'square',
   // Board display rotation (0-3, incremented CW by the rotate button).
   // Rotates the virtual board canvas so it matches the physical board orientation.
   boardRotation: 0,
@@ -1219,6 +1220,79 @@ function defaultCorners(){
 }
 function ensureCorners(){
   if(!S.corners || S.corners.length !== 4) S.corners = defaultCorners();
+}
+// Reset all in-app settings to factory defaults. Archives (past games) and the
+// PeerJS connection (room ID) are preserved. Called from the "全設定リセット"
+// button and automatically when the room ID is regenerated.
+function resetAllSettings(){
+  archiveCurrentGame();
+  clearGameSnapshot();
+  // Board / detection
+  S.size = 19;
+  S.corners = defaultCorners();
+  S.calibMode = 'square';
+  S.boardRotation = 0;
+  S.refBoard = null;
+  S.stoneCalib = null;
+  S.showCalibGuide = false;
+  // Detection thresholds
+  S.blackTh = 55;
+  S.whiteTh = 22;
+  S.histDepth = 10;
+  S.targetFps = 8;
+  S.settleDelayMs = 2000;
+  S.dbgOverlay = false;
+  S.autoTurn = true;
+  S.trackMoves = true;
+  S.soundOn = false;
+  S.showMoveNum = false;
+  // Game / players
+  S.blackName = '';
+  S.whiteName = '';
+  S.gameName = '';
+  S.komi = 6.5;
+  S.handicap = 0;
+  S.result = '';
+  S.turn = 'B';
+  S.moves = [];
+  S.initialPosition = null;
+  S.movesInitialized = false;
+  S.gameStarted = false;
+  S.suspiciousFrames = 0;
+  S.chat = [];
+  initDetectionState();
+  // Sync UI
+  const cp = $('calibPrompt'); if(cp) cp.style.display = 'none';
+  $('blackTh').value = S.blackTh; $('blackVal').textContent = S.blackTh;
+  $('whiteTh').value = S.whiteTh; $('whiteVal').textContent = S.whiteTh;
+  $('histDepth').value = S.histDepth; $('histVal').textContent = S.histDepth;
+  $('targetFps').value = S.targetFps; $('fpsVal').textContent = S.targetFps;
+  $('settleDelay').value = Math.round(S.settleDelayMs/100);
+  $('settleVal').textContent = (S.settleDelayMs/1000).toFixed(1) + 's';
+  $('dbgOverlay').checked = S.dbgOverlay;
+  $('calibMode').value = S.calibMode;
+  updateCalibModeUI();
+  $('autoTurn').checked = S.autoTurn;
+  $('trackMoves').checked = S.trackMoves;
+  $('soundOn').checked = S.soundOn;
+  $('showMoveNum').checked = S.showMoveNum;
+  $('blackName').value = '';
+  $('whiteName').value = '';
+  $('gameName').value = '';
+  $('komi').value = 6.5;
+  $('handicap').value = 0;
+  $('result').value = '';
+  $('moveCount').textContent = 0;
+  setActiveSize(S.size);
+  updateGameStateUI();
+  updateRefBoardUI();
+  updateStoneCalibUI();
+  renderChat();
+  renderArchivePanel();
+  drawOverlay();
+  drawBoardCanvas('boardB');
+  saveSettings();
+  broadcastState();
 }
 function resizeOverlay(){
   const ov = $('overlay');
@@ -3788,9 +3862,26 @@ function init(){
     catch(e){ toast('コピー失敗', true); }
   });
   $('newId').addEventListener('click', ()=>{
-    try{ localStorage.removeItem('goboard.peerShortId'); }catch(e){}
-    startPeerHost(true);
-    toast('新しい部屋IDを発行します...');
+    showCalibPrompt(
+      '新しい部屋IDを発行しますか？<br>' +
+      '<span style="color:#aaa;font-weight:400;font-size:.85rem">部屋IDが変わると共に、校正データ・対局状態・対局者情報・検出設定が初期値に戻ります。<br>棋譜履歴は残ります。</span>',
+      ()=>{
+        try{ localStorage.removeItem('goboard.peerShortId'); }catch(e){}
+        resetAllSettings();
+        startPeerHost(true);
+        toast('新しい部屋IDを発行し、設定を初期化しました');
+      }
+    );
+  });
+  $('btnResetAll').addEventListener('click', ()=>{
+    showCalibPrompt(
+      'すべての設定を初期値に戻しますか？<br>' +
+      '<span style="color:#aaa;font-weight:400;font-size:.85rem">校正データ・対局状態・対局者情報・検出設定が初期値に戻ります。<br>棋譜履歴と部屋IDは残ります。</span>',
+      ()=>{
+        resetAllSettings();
+        toast('すべての設定を初期値に戻しました');
+      }
+    );
   });
   $('copyUrl').addEventListener('click', async ()=>{
     const v = $('viewUrl').textContent;
