@@ -762,6 +762,7 @@ function archiveCurrentGame(){
 }
 function restoreFromSnapshot(snap){
   if(!snap || snap.v !== 1) return false;
+  if(!Number.isInteger(snap.size) || snap.size < 5 || snap.size > 25) return false;
   S.size = snap.size;
   setActiveSize(S.size);
   initDetectionState();
@@ -3224,9 +3225,9 @@ function init(){
   });
   $('showMoveNum').addEventListener('change', e=>{ S.showMoveNum = e.target.checked; saveSettings(); drawBoardCanvas('boardB'); });
   function onPlayerNameChange(){
-    S.blackName = $('blackName').value.trim();
-    S.whiteName = $('whiteName').value.trim();
-    S.gameName = $('gameName').value.trim();
+    S.blackName = $('blackName').value.trim().slice(0, 64);
+    S.whiteName = $('whiteName').value.trim().slice(0, 64);
+    S.gameName = $('gameName').value.trim().slice(0, 80);
     saveSettings();
     broadcastState();
   }
