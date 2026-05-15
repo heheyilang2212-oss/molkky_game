@@ -270,9 +270,9 @@ a{color:#7cb7ff}
           <input type="range" id="blackTh" min="10" max="120" value="55">
         </div>
         <div class="sRow">
-          <div class="sHead">白の判定の厳しさ <span class="v" id="whiteVal">30</span></div>
+          <div class="sHead">白の判定の厳しさ <span class="v" id="whiteVal">22</span></div>
           <div style="font-size:.7rem;color:#aaa;margin-bottom:4px">大きい=より明るい時だけ白と判定（光の反射に強い）／小さい=白と認めやすい</div>
-          <input type="range" id="whiteTh" min="5" max="120" value="30">
+          <input type="range" id="whiteTh" min="5" max="120" value="22">
         </div>
         <div class="sRow">
           <div class="sHead">安定化フレーム数 <span class="v" id="histVal">10</span></div>
@@ -356,6 +356,10 @@ a{color:#7cb7ff}
         <input id="bChatInput" type="text" maxlength="200" placeholder="観戦者にメッセージ..." style="flex:1;padding:6px 10px;border-radius:6px;border:1px solid rgba(255,255,255,.18);background:rgba(0,0,0,.25);color:#fff">
         <button id="bChatSend" style="padding:6px 14px;border-radius:6px;background:rgba(244,208,63,.2);color:#f4d03f;border:1px solid rgba(244,208,63,.4)">送信</button>
       </div>
+    </details>
+    <details class="settings" style="margin-top:8px">
+      <summary>📂 過去の棋譜 <span id="archiveCount" style="color:#888;font-size:.72rem"></span></summary>
+      <div id="archiveList" style="font-size:.8rem;color:#ddd;max-height:240px;overflow-y:auto;margin-top:6px"></div>
     </details>
   </div>
 </section>
@@ -505,7 +509,7 @@ const S = {
   prevCommitted: null,     // for diffing
   // Settings
   blackTh: 55,
-  whiteTh: 30,
+  whiteTh: 22,
   histDepth: 10,
   targetFps: 8,
   dbgOverlay: false,
@@ -654,7 +658,9 @@ function renderChat(){
       const color = m.mine ? '#7cffa7' : '#f4d03f';
       return `<div><span style="color:${color}">${nm}</span> <span style="color:#666">${t}</span><br><span style="color:#eee">${tx}</span></div>`;
     }).join('');
-    el.scrollTop = el.scrollHeight;
+    // Only auto-scroll if the user is already near the bottom (within 60px).
+    // This avoids hijacking the scroll position if the user is reading old messages.
+    if(el.scrollHeight - el.scrollTop - el.clientHeight < 60) el.scrollTop = el.scrollHeight;
   }
   const cnt = (S.chat || []).length;
   if($('bChatCount')) $('bChatCount').textContent = '(' + cnt + ')';
@@ -690,6 +696,7 @@ function viewerSendChat(text){
 // ============================================================
 const SAVED_GAME_KEY = 'goboard.savedGame.v1';
 const ARCHIVED_GAMES_KEY = 'goboard.archivedGames.v1';
+let _saveQuotaToastedAt = 0;
 function saveGameSnapshot(){
   if(!S.gameStarted) return;
   if(!S.movesInitialized) return;
@@ -707,7 +714,15 @@ function saveGameSnapshot(){
       ts: Date.now(),
     };
     localStorage.setItem(SAVED_GAME_KEY, JSON.stringify(snap));
-  }catch(e){ console.warn('saveGameSnapshot failed', e); }
+  }catch(e){
+    console.warn('saveGameSnapshot failed', e);
+    // Quota errors fire on every save attempt — throttle the toast to once
+    // per minute so the screen isn't spammed.
+    if(e && e.name === 'QuotaExceededError' && Date.now() - _saveQuotaToastedAt > 60000){
+      _saveQuotaToastedAt = Date.now();
+      toast('⚠ 容量不足で対局を保存できません。古いアーカイブを削除してください', true);
+    }
+  }
 }
 function loadGameSnapshot(){
   try{
@@ -740,10 +755,14 @@ function archiveCurrentGame(){
     // Cap at 20 archived games
     while(list.length > 20) list.pop();
     localStorage.setItem(ARCHIVED_GAMES_KEY, JSON.stringify(list));
-  }catch(e){ console.warn('archive failed', e); }
+  }catch(e){
+    console.warn('archive failed', e);
+    if(e && e.name === 'QuotaExceededError') toast('⚠ ストレージ容量が不足しています。古いアーカイブを削除してください', true);
+  }
 }
 function restoreFromSnapshot(snap){
   if(!snap || snap.v !== 1) return false;
+  if(!Number.isInteger(snap.size) || snap.size < 5 || snap.size > 25) return false;
   S.size = snap.size;
   setActiveSize(S.size);
   initDetectionState();
@@ -777,6 +796,7 @@ function restoreFromSnapshot(snap){
   drawBoardCanvas('boardB');
   drawOverlay();
   broadcastState();
+  saveGameSnapshot();
   return true;
 }
 function updateRefBoardUI(){
@@ -849,6 +869,54 @@ function updateStoneCalibUI(){
     clr.style.display = 'none';
   }
 }
+function renderArchivePanel(){
+  const list = document.getElementById('archiveList');
+  const cnt = document.getElementById('archiveCount');
+  if(!list) return;
+  let archives = [];
+  try{ archives = JSON.parse(localStorage.getItem(ARCHIVED_GAMES_KEY) || '[]'); }catch(e){}
+  if(cnt) cnt.textContent = archives.length ? '(' + archives.length + ')' : '';
+  if(!archives.length){
+    list.innerHTML = '<em style="color:#666">まだアーカイブがありません</em>';
+    return;
+  }
+  list.innerHTML = archives.map((g, idx) => {
+    const d = new Date(g.ts || 0);
+    const dStr = d.toLocaleDateString('ja-JP') + ' ' + d.toLocaleTimeString('ja-JP').slice(0,5);
+    const bName = escapeHtml((g.blackName || '黒').slice(0, 20));
+    const wName = escapeHtml((g.whiteName || '白').slice(0, 20));
+    const gName = g.gameName ? (' 「' + escapeHtml(g.gameName.slice(0, 30)) + '」') : '';
+    const res = g.result ? (' <span style="color:#7cffa7">' + escapeHtml(g.result) + '</span>') : '';
+    return `<div style="display:flex;align-items:center;gap:6px;padding:5px 0;border-bottom:1px solid rgba(255,255,255,.08)">
+      <div style="flex:1;min-width:0">
+        <div style="color:#f4d03f;font-weight:600">${bName} vs ${wName}${gName}${res}</div>
+        <div style="color:#888;font-size:.75rem">${dStr} / ${g.moves || 0}手</div>
+      </div>
+      <button data-sgf="${idx}" style="padding:4px 10px;border-radius:6px;background:rgba(244,208,63,.18);color:#f4d03f;border:1px solid rgba(244,208,63,.35);font-size:.75rem;white-space:nowrap">SGF</button>
+      <button data-del="${idx}" style="padding:4px 8px;border-radius:6px;background:rgba(255,80,80,.12);color:#ff8080;border:1px solid rgba(255,80,80,.3);font-size:.75rem;white-space:nowrap">✕</button>
+    </div>`;
+  }).join('');
+  list.querySelectorAll('button[data-sgf]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const idx = +btn.dataset.sgf;
+      const g = archives[idx];
+      if(!g || !g.sgf) return;
+      const d = new Date(g.ts || 0);
+      const stamp = d.toISOString().slice(0,10);
+      downloadSGF(g.sgf, 'goboard_archive_' + stamp);
+      toast('アーカイブからSGFをダウンロード');
+    });
+  });
+  list.querySelectorAll('button[data-del]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const idx = +btn.dataset.del;
+      archives.splice(idx, 1);
+      try{ localStorage.setItem(ARCHIVED_GAMES_KEY, JSON.stringify(archives)); }catch(e){}
+      renderArchivePanel();
+      toast('アーカイブを削除しました');
+    });
+  });
+}
 function updateGameStateUI(){
   const ind = document.getElementById('gameStateInd');
   const start = document.getElementById('btnStart');
@@ -899,9 +967,40 @@ function loadSettings(){
     if(typeof j.komi === 'number') S.komi = j.komi;
     if(typeof j.handicap === 'number') S.handicap = j.handicap;
     if(j.selectedCamId) S.selectedCamId = j.selectedCamId;
+    // Restore calibration data across sessions (Float32Array serialized as plain array)
+    if(j.refBoard && Array.isArray(j.refBoard.V) && Array.isArray(j.refBoard.S) &&
+       j.refBoard.V.length === j.refBoard.size * j.refBoard.size){
+      S.refBoard = { size: j.refBoard.size, V: new Float32Array(j.refBoard.V),
+                     S: new Float32Array(j.refBoard.S), ts: j.refBoard.ts };
+    }
+    if(j.stoneCalib && typeof j.stoneCalib.blackV === 'number') S.stoneCalib = j.stoneCalib;
   }catch(e){}
 }
+// Coalesce rapid saves (slider drags fire dozens of input events per second)
+// so we don't re-serialize the ~5KB refBoard payload on every step. A 200ms
+// trailing-edge debounce is invisible to users but avoids the cost. We also
+// flush on pagehide/visibilitychange so the latest state survives a quick
+// close or tab switch.
+let _saveSettingsTimer = null;
 function saveSettings(){
+  if(_saveSettingsTimer) clearTimeout(_saveSettingsTimer);
+  _saveSettingsTimer = setTimeout(()=>{
+    _saveSettingsTimer = null;
+    saveSettingsNow();
+  }, 200);
+}
+function flushSaveSettings(){
+  if(_saveSettingsTimer){
+    clearTimeout(_saveSettingsTimer);
+    _saveSettingsTimer = null;
+    saveSettingsNow();
+  }
+}
+window.addEventListener('pagehide', flushSaveSettings);
+document.addEventListener('visibilitychange', ()=>{
+  if(document.visibilityState === 'hidden') flushSaveSettings();
+});
+function saveSettingsNow(){
   try{
     localStorage.setItem(STORAGE_KEY, JSON.stringify({
       size: S.size,
@@ -925,6 +1024,12 @@ function saveSettings(){
       komi: S.komi,
       handicap: S.handicap,
       selectedCamId: S.selectedCamId,
+      // Calibration data persisted across sessions (Float32Array → plain array for JSON)
+      refBoard: (S.refBoard && S.refBoard.V) ? {
+        size: S.refBoard.size, ts: S.refBoard.ts,
+        V: Array.from(S.refBoard.V), S: Array.from(S.refBoard.S),
+      } : null,
+      stoneCalib: S.stoneCalib || null,
     }));
   }catch(e){}
 }
@@ -1034,6 +1139,16 @@ async function startCamera(){
   // After permission we get labels
   await listCameras();
   resizeOverlay();
+  // Show/hide zoom controls depending on whether hardware zoom is available.
+  // CSS fallback (scale transform) is always possible, so always show them,
+  // but mark the label to indicate CSS-only mode so users know the quality impact.
+  try{
+    const track = S.stream && S.stream.getVideoTracks()[0];
+    const caps = (track && track.getCapabilities) ? track.getCapabilities() : {};
+    const hasHwZoom = !!(caps.zoom && caps.zoom.max > caps.zoom.min);
+    const zLabel = $('zoomLabel');
+    if(zLabel) zLabel.title = hasHwZoom ? 'ハードウェアズーム' : 'ソフトウェアズーム（画質低下あり）';
+  }catch(e){}
 }
 function stopCamera(){
   if(S.stream){
@@ -1042,6 +1157,24 @@ function stopCamera(){
   }
   if(S.videoEl) S.videoEl.srcObject = null;
 }
+
+// Keep the screen awake while broadcasting so a long game doesn't get
+// interrupted by the device dimming/locking. Browsers auto-release on
+// visibility change, so we re-request when the page becomes visible again.
+let _wakeLock = null;
+async function requestWakeLock(){
+  if(!('wakeLock' in navigator)) return;
+  try{
+    _wakeLock = await navigator.wakeLock.request('screen');
+    _wakeLock.addEventListener('release', ()=>{ _wakeLock = null; });
+  }catch(e){ /* permission denied, page hidden, etc. */ }
+}
+function releaseWakeLock(){
+  if(_wakeLock){ try{ _wakeLock.release(); }catch(e){} _wakeLock = null; }
+}
+document.addEventListener('visibilitychange', ()=>{
+  if(document.visibilityState === 'visible' && S.mode === 'broadcast') requestWakeLock();
+});
 async function applyZoom(delta){
   const newStep = Math.max(0, Math.min(10, S.zoomStep + delta));
   if(newStep === S.zoomStep) return;
@@ -1474,6 +1607,8 @@ function initDetectionState(){
   S.lastMotionTime = 0;
   S._wasSettled = false;
   S.motionLevel = 0;
+  S._lastGoodRef = undefined;
+  S.suspiciousFrames = 0;
 }
 function pushHistory(i, j, val){
   const buf = S.history[i][j];
@@ -1482,13 +1617,6 @@ function pushHistory(i, j, val){
 }
 function commitFromHistory(){
   const N = S.size, K = S.histDepth;
-  // Normal vote threshold (70%). Used when adding a stone or keeping the same
-  // class. Reverting an already-committed stone back to empty (or flipping
-  // between black and white) requires a stronger majority (90%): this makes
-  // brief noise — a momentary flicker from a glare or partial occlusion —
-  // unable to wipe out a stone that has been stable for a while.
-  const minVotes = Math.max(2, Math.ceil(K * 0.7));
-  const strongVotes = Math.max(2, Math.ceil(K * 0.9));
   for(let i=0;i<N;i++){
     for(let j=0;j<N;j++){
       const buf = S.history[i][j];
@@ -1501,8 +1629,15 @@ function commitFromHistory(){
       const top = Math.max(cB, cW, cE);
       const candidate = (top===cB)?'B':(top===cW)?'W':'.';
       const cur = S.committed[i][j];
-      const needed = (cur === '.' || cur === candidate) ? minVotes : strongVotes;
-      if(top >= Math.min(needed, buf.length)){
+      // Placing or keeping a stone: 65% of the current buffer length.
+      // Using buf.length instead of K means the threshold scales from the
+      // first frame so early frames don't require 100% consistency.
+      // Removing a committed stone requires 90%: protects against transient
+      // glare / occlusion wiping a stone that has been stable for a while.
+      const required = (cur === '.' || cur === candidate)
+        ? Math.max(2, Math.round(buf.length * 0.65))
+        : Math.max(2, Math.round(buf.length * 0.90));
+      if(top >= required){
         S.committed[i][j] = candidate;
       }
     }
@@ -1652,16 +1787,42 @@ function detectFrame(){
   }
   // Stash the latest per-cell samples so the "空の盤面を記録" button can use them.
   S._lastVs = Vs; S._lastSs = Ss;
-  // Estimate board reference brightness as median of all intersections.
-  // Most points are empty (= wood) for typical positions, so median ≈ wood V.
-  const Vall = Array.from(Vs);
-  const ref = median(Vall);
-  // A real white stone is nearly grayscale, but warm indoor lighting (LED /
-  // incandescent) tints it noticeably yellow, pushing saturation well past
-  // 0.3. We still want to reject strongly coloured glare, so the gate sits at
-  // 0.45 — generous enough for warm-lit white stones, since the brightness
-  // test (v > ref + whiteTh) already excludes the board wood itself.
-  const W_SAT_MAX = 0.45;
+  // Estimate wood brightness from known-empty intersections only.
+  // Using all cells (including stones) biases the median as the board fills up —
+  // dense black stones pull ref down, white stones push it up — causing thresholds
+  // to drift and accuracy to degrade. S.committed holds the last confirmed state,
+  // so empty cells there are reliable wood samples. Fall back to all cells only
+  // when committed is unavailable or the board is extremely crowded (<10% empty).
+  // Single pass over committed-empty cells: collect both brightness (woodVals)
+  // and saturation (_sRefSum/_sRefCnt) to avoid iterating the committed grid twice.
+  const woodVals = [];
+  let _sRefSum = 0, _sRefCnt = 0;
+  if(S.committed && S.committed.length === N){
+    for(let i=0;i<N;i++) for(let j=0;j<N;j++){
+      if(S.committed[i][j] === '.'){
+        woodVals.push(Vs[i*N + j]);
+        _sRefSum += Ss[i*N+j]; _sRefCnt++;
+      }
+    }
+  }
+  // Cache last good ref (computed from enough empty cells) so dense endgame
+  // boards don't fall back to median(all cells) which is dominated by stones.
+  let ref;
+  if(woodVals.length >= Math.ceil(N*N * 0.1)){
+    ref = median(woodVals);
+    S._lastGoodRef = ref;
+  } else if(S._lastGoodRef !== undefined){
+    ref = S._lastGoodRef;
+  } else {
+    ref = median(Array.from(Vs));
+  }
+  // Adaptive white saturation gate: the board's own ambient saturation (mean
+  // of empty-cell Ss values) sets the baseline. Under warm LED/incandescent
+  // light the wood itself has sRef ≈ 0.30-0.40, so white stones (also warmed)
+  // need a higher ceiling. We add +0.20 and clamp to [0.45, 0.60].
+  // Normal board (sRef≈0.20) → 0.45; warm board (sRef≈0.35) → 0.55.
+  const _sRef = _sRefCnt >= Math.ceil(N*N * 0.1) ? _sRefSum / _sRefCnt : 0.25;
+  const W_SAT_MAX = Math.max(0.45, Math.min(0.60, _sRef + 0.20));
   // If we have a recorded empty-board reference for the current board size,
   // use it directly as the per-cell baseline. This handles wood-grain knots,
   // persistent shadows, and bowl/lid placement under the camera much better
@@ -1727,17 +1888,46 @@ function detectFrame(){
     // empty neighbours exist (highly populated region).
     const radius = 2;
     const tmp = [];
+    const hasCommitted = !!(S.committed && S.committed.length === N);
     for(let i=0;i<N;i++){
       cls[i] = new Array(N);
       for(let j=0;j<N;j++){
         tmp.length = 0;
-        for(let di=-radius; di<=radius; di++){
-          const ni = i+di;
-          if(ni<0||ni>=N) continue;
-          for(let dj=-radius; dj<=radius; dj++){
-            const nj = j+dj;
-            if(nj<0||nj>=N) continue;
-            if(cls1[ni][nj] === '.') tmp.push(Vs[ni*N + nj]);
+        // Primary: cells confirmed empty by the previous committed state —
+        // stable even in dense regions where cls1 neighbours are sparse.
+        if(hasCommitted){
+          for(let di=-radius; di<=radius; di++){
+            const ni = i+di; if(ni<0||ni>=N) continue;
+            for(let dj=-radius; dj<=radius; dj++){
+              const nj = j+dj; if(nj<0||nj>=N) continue;
+              if(S.committed[ni][nj] === '.') tmp.push(Vs[ni*N + nj]);
+            }
+          }
+        }
+        // Fallback 1: cells classified empty in pass-1 (catches newly emptied cells).
+        // Skip cells already counted from committed above to avoid double-weighting.
+        if(tmp.length < 4){
+          for(let di=-radius; di<=radius; di++){
+            const ni = i+di; if(ni<0||ni>=N) continue;
+            for(let dj=-radius; dj<=radius; dj++){
+              const nj = j+dj; if(nj<0||nj>=N) continue;
+              if(hasCommitted && S.committed[ni][nj] === '.') continue; // already in primary
+              if(cls1[ni][nj] === '.') tmp.push(Vs[ni*N + nj]);
+            }
+          }
+        }
+        // Fallback 2: wider radius search (dense stone regions exhaust r=2).
+        // Only add cells outside the already-searched r=2 area.
+        if(tmp.length < 4){
+          const r2 = Math.min(N-1, radius + 2);
+          for(let di=-r2; di<=r2; di++){
+            const ni = i+di; if(ni<0||ni>=N) continue;
+            for(let dj=-r2; dj<=r2; dj++){
+              const nj = j+dj; if(nj<0||nj>=N) continue;
+              if(Math.abs(di) <= radius && Math.abs(dj) <= radius) continue; // already covered
+              if(cls1[ni][nj] === '.' || (hasCommitted && S.committed[ni][nj] === '.'))
+                tmp.push(Vs[ni*N + nj]);
+            }
           }
         }
         const lref = tmp.length >= 4 ? median(tmp) : ref;
@@ -1790,10 +1980,14 @@ function detectFrame(){
   } else {
     S.consecutiveRejects++;
     if(S.consecutiveRejects > 25){
-      // Long sustained difference — assume scene actually changed.
+      // Long sustained difference — assume scene actually changed. Snap history
+      // so committed state reflects the new scene immediately rather than
+      // slowly bleeding in via voting.
       S.lastAcceptedClass = cls;
       S.consecutiveRejects = 0;
-      for(let i=0;i<N;i++) for(let j=0;j<N;j++) pushHistory(i, j, cls[i][j]);
+      for(let i=0;i<N;i++) for(let j=0;j<N;j++){
+        S.history[i][j] = Array.from({length: S.histDepth}, ()=>cls[i][j]);
+      }
     }
   }
   commitFromHistory();
@@ -1808,7 +2002,16 @@ function detectFrame(){
   $('bCount').textContent = bc;
   $('wCount').textContent = wc;
   if(S.autoTurn){
-    S.turn = (bc <= wc) ? 'B' : 'W';
+    // Passes don't change stone counts but do advance the turn, so factor them in.
+    let bPasses = 0, wPasses = 0;
+    if(S.movesInitialized){ for(const m of (S.moves||[])){ if(m.x==null){ if(m.c==='B') bPasses++; else wPasses++; } } }
+    // Handicap stones (H>=2) belong to Black's initial setup; White plays first in the game.
+    // Subtract them so the effective Black move count starts at 0 after placement.
+    const handi = (typeof S.handicap === 'number' && S.handicap >= 2) ? S.handicap : 0;
+    const adjBc = bc - handi + bPasses;
+    S.turn = handi > 0
+      ? (adjBc < wc + wPasses ? 'B' : 'W')   // handicap: White goes first → strict <
+      : (adjBc <= wc + wPasses ? 'B' : 'W');  // normal: Black goes first → <=
   }
   $('turnInd').innerHTML = '手番: <b>' + (S.turn==='B' ? '黒●' : '白○') + '</b>';
   // Stability indicator
@@ -1850,7 +2053,7 @@ function trackMoves(){
   }
   // Diff prev → current
   const newOnes = [];
-  let bDelta = 0, wDelta = 0;
+  let bDelta = 0, wDelta = 0, removals = 0;
   for(let i=0;i<N;i++) for(let j=0;j<N;j++){
     const a = S.prevCommitted[i][j], b = S.committed[i][j];
     if(a === b) continue;
@@ -1858,11 +2061,26 @@ function trackMoves(){
     else if(a === '.' && b === 'W'){ newOnes.push({c:'W',x:i,y:j}); wDelta++; }
     else if(a === 'B' && b === 'W'){ newOnes.push({c:'W',x:i,y:j}); wDelta++; }
     else if(a === 'W' && b === 'B'){ newOnes.push({c:'B',x:i,y:j}); bDelta++; }
-    // a !== '.' && b === '.' — removed (capture). No move recorded for it.
+    else if(a !== '.' && b === '.') removals++;
   }
   if(newOnes.length === 0){
-    syncPrevToCommitted();
-    S.suspiciousFrames = 0;
+    if(removals > 0){
+      // Stones disappeared with no new placement — almost certainly a
+      // misdetection flicker, NOT a real capture (in Go, captures only happen
+      // when a stone is placed). Keep prevCommitted unchanged so that when
+      // the stone reappears it is NOT counted as a new move.
+      // Count FRAMES (not stones) so a large legitimate capture that spans
+      // two detection frames doesn't prematurely fire the stale toast.
+      S.suspiciousFrames++;
+      if(S.suspiciousFrames > 40){
+        syncPrevToCommitted();
+        S.suspiciousFrames = 0;
+        toast('認識が不安定です。基準位置を再同期しました', true);
+      }
+    } else {
+      syncPrevToCommitted();
+      S.suspiciousFrames = 0;
+    }
     return;
   }
   // Allow several simultaneous changes per frame: when the broadcaster freezes
@@ -2126,6 +2344,10 @@ function attachBoardEdit(){
   const cnv = $('boardB');
   cnv.addEventListener('click', (e)=>{
     if(!S.committed) return;
+    // Don't accept manual edits while the stone-calibration guide overlay is
+    // up — the user is supposed to be placing physical stones, and an accidental
+    // tap shouldn't flip cells in the recognized board.
+    if(S.showCalibGuide) return;
     const r = cnv.getBoundingClientRect();
     let px = (e.clientX - r.left) * (cnv.width / r.width);
     let py = (e.clientY - r.top) * (cnv.height / r.height);
@@ -2151,6 +2373,7 @@ function attachBoardEdit(){
     drawBoardCanvas('boardB');
     drawOverlay();
     broadcastState();
+    saveGameSnapshot();
   });
 }
 
@@ -2251,7 +2474,7 @@ function startPeerHost(forceNewId){
   }
   const id = PEER_PREFIX + shortId;
   setLiveBadge('connecting');
-  S.peer = new Peer(id, { debug: 1, config: ICE_CONFIG });
+  S.peer = new Peer(id, { debug: 0, config: ICE_CONFIG });
   S.peer.on('open', (pid)=>{
     S.peerId = pid;
     const shortId = pid.replace(PEER_PREFIX, '');
@@ -2301,7 +2524,7 @@ function startPeerHost(forceNewId){
         const text = (typeof data.text === 'string') ? data.text.slice(0, 300) : '';
         if(!text) return;
         const meta = S.connInfo && S.connInfo.get(conn);
-        const name = (data.name && data.name.trim()) || (meta && meta.name) || '(匿名)';
+        const name = ((data.name && data.name.trim()) || (meta && meta.name) || '(匿名)').slice(0, 32);
         broadcasterRelayChat(conn, { id: data.id, name, text, ts: data.ts || Date.now() });
       }
     });
@@ -2321,7 +2544,9 @@ function startPeerHost(forceNewId){
         }
         const timer = setTimeout(()=>{
           if(S._pendingDeparts) S._pendingDeparts.delete(name);
-          toast('👁 ' + name + ' さんが退室しました');
+          // Only show if they haven't reconnected under the same name
+          const stillPresent = S.connInfo && [...S.connInfo.values()].some(m => m.name === name && m.announced);
+          if(!stillPresent) toast('👁 ' + name + ' さんが退室しました');
         }, 10000);
         S._pendingDeparts.set(name, timer);
       }
@@ -2355,6 +2580,7 @@ function snapshotState(){
     initialPosition: (tracking && S.movesInitialized) ? S.initialPosition : null,
     started: S.gameStarted,
     turn: S.turn,
+    boardRotation: S.boardRotation || 0,
     blackName: S.blackName || '',
     whiteName: S.whiteName || '',
     gameName: S.gameName || '',
@@ -2394,7 +2620,7 @@ function startPeerViewer(shortId){
   setVStatus('接続中...', 'connecting');
   if(S.conn){ try{ S.conn.close(); }catch(e){} S.conn = null; }
   if(S.peer){ try{ S.peer.destroy(); }catch(e){} S.peer = null; }
-  S.peer = new Peer({ debug: 1, config: ICE_CONFIG });
+  S.peer = new Peer({ debug: 0, config: ICE_CONFIG });
   // Only call connectToHost on the FIRST 'open'. Subsequent 'open' events come
   // from peer.reconnect() after a signaling-server hiccup — calling connectToHost
   // again would tear down a healthy DataConnection and create a duplicate one,
@@ -2490,6 +2716,12 @@ function renderViewerBoard(){
     drawBoardCanvas('boardV', { size: S.size, committed: null });
     $('vMoveLabel').textContent = '0';
     $('vMoveTotal').textContent = '0';
+    $('vMoveCount').textContent = '0';
+    $('vBCount').textContent = '0';
+    $('vWCount').textContent = '0';
+    $('vTurn').textContent = '';
+    $('vTurn').style.color = '';
+    const pEl = $('vPlayers'); if(pEl){ pEl.innerHTML = ''; pEl.style.display = 'none'; }
     return;
   }
   const N = data.size;
@@ -2513,6 +2745,7 @@ function renderViewerBoard(){
     committed: board,
     lastMove: lastMove,
     moves: (data.moves || []).slice(0, idx),
+    boardRotation: data.boardRotation || 0,
   });
   let bc=0, wc=0;
   for(const row of board) for(const c of row){
@@ -2529,6 +2762,13 @@ function renderViewerBoard(){
   } else {
     $('vTurn').textContent = '';
     $('vTurn').style.color = '';
+    // Turn indicator reflects the position being shown
+    if(lastMove){
+      const nextTurn = lastMove.c === 'B' ? 'W' : 'B';
+      $('vTurn').innerHTML = '手番: <b>' + (nextTurn==='B'?'黒●':'白○') + '</b>';
+    } else if(data.turn){
+      $('vTurn').innerHTML = '手番: <b>' + (data.turn==='B'?'黒●':'白○') + '</b>';
+    }
   }
   const pEl = $('vPlayers');
   if(pEl){
@@ -2547,14 +2787,8 @@ function renderViewerBoard(){
   }
   const sl = $('vSlider');
   if(+sl.max !== total) sl.max = total;
-  if(+sl.value !== idx) sl.value = idx;
-  // Turn indicator reflects the position being shown
-  if(lastMove){
-    const nextTurn = lastMove.c === 'B' ? 'W' : 'B';
-    $('vTurn').innerHTML = '手番: <b>' + (nextTurn==='B'?'黒●':'白○') + '</b>';
-  } else if(data.turn){
-    $('vTurn').innerHTML = '手番: <b>' + (data.turn==='B'?'黒●':'白○') + '</b>';
-  }
+  // Don't overwrite slider while user is dragging it
+  if(+sl.value !== idx && document.activeElement !== sl) sl.value = idx;
   // Live badge
   const live = $('vToLive');
   if(live) live.classList.toggle('on', S.vAtLive);
@@ -2574,7 +2808,13 @@ function viewerStartPlayback(){
   if(btn){ btn.textContent = '⏸'; btn.classList.add('on'); }
   S.vPlayHandle = setInterval(()=>{
     const total = viewerTotalMoves();
-    if(S.vViewIndex >= total){ viewerStopPlayback(); return; }
+    if(S.vViewIndex >= total){
+      // Reached the live end — re-engage live mode so future moves auto-appear.
+      viewerStopPlayback();
+      S.vAtLive = true;
+      renderViewerBoard();
+      return;
+    }
     S.vViewIndex = Math.min(total, S.vViewIndex + 1);
     renderViewerBoard();
   }, 900);
@@ -2594,16 +2834,27 @@ function connectToHost(shortId){
   S.conn = conn;
   // Timeout: if WebRTC ICE negotiation takes too long (e.g. strict NAT without TURN),
   // conn.on('open') never fires. Detect and retry.
+  // Show a live countdown so users know the app is still working.
+  const ICE_TIMEOUT = 18000;
+  const iceStart = Date.now();
+  const iceCountdown = setInterval(()=>{
+    if(conn.open){ clearInterval(iceCountdown); return; }
+    const elapsed = Date.now() - iceStart;
+    const remaining = Math.max(0, Math.ceil((ICE_TIMEOUT - elapsed) / 1000));
+    setVStatus(`接続中...（経路を探しています ${remaining}s）`, 'connecting');
+  }, 1000);
   const connTimeout = setTimeout(()=>{
+    clearInterval(iceCountdown);
     if(!conn.open){
       setVStatus('接続タイムアウト（NAT越えに失敗の可能性）- 再試行します...', 'disconnected');
       try{ conn.close(); }catch(e){}
       showReconnectBtn(shortId);
       scheduleReconnect(shortId);
     }
-  }, 18000);
+  }, ICE_TIMEOUT);
   conn.on('open', ()=>{
     clearTimeout(connTimeout);
+    clearInterval(iceCountdown);
     _reconnectAttempts = 0;
     hideReconnectBtn();
     setVStatus('接続済み', 'connected');
@@ -2625,23 +2876,24 @@ function connectToHost(shortId){
     } else if(data.type === 'chat'){
       const text = (typeof data.text === 'string') ? data.text.slice(0, 300) : '';
       if(!text) return;
-      appendChat({ id: data.id, name: data.name || '(匿名)', text, ts: data.ts || Date.now(), mine: false });
+      appendChat({ id: data.id, name: (data.name || '(匿名)').slice(0, 32), text, ts: data.ts || Date.now(), mine: false });
     }
   });
   conn.on('close', ()=>{
-    clearTimeout(connTimeout);
+    clearTimeout(connTimeout); clearInterval(iceCountdown);
     setVStatus('切断されました - 再接続します...', 'disconnected');
     showReconnectBtn(shortId);
     scheduleReconnect(shortId);
   });
   conn.on('error', (e)=>{
-    clearTimeout(connTimeout);
+    clearTimeout(connTimeout); clearInterval(iceCountdown);
     setVStatus('接続エラー - 再接続します...', 'disconnected');
     showReconnectBtn(shortId);
     scheduleReconnect(shortId);
   });
 }
 function scheduleReconnect(shortId){
+  if(S.mode !== 'view') return;  // don't schedule if user already exited viewer
   const now = Date.now();
   // Hard floor: never reschedule a reconnect within 800ms of the last one.
   // This kills the runaway loop where multiple events (close + error + timeout)
@@ -2717,6 +2969,8 @@ async function enterBroadcast(){
   S.initialPosition = null;
   S.suspiciousFrames = 0;
   S.gameStarted = false;
+  S.showCalibGuide = false;
+  S.result = '';
   S.connInfo = new Map();
   S.chat = [];
   renderChat();
@@ -2725,6 +2979,7 @@ async function enterBroadcast(){
   updateRefBoardUI();
   updateStoneCalibUI();
   updateViewerListUI();
+  renderArchivePanel();
   // Sync UI to settings
   $('blackTh').value = S.blackTh; $('blackVal').textContent = S.blackTh;
   $('whiteTh').value = S.whiteTh; $('whiteVal').textContent = S.whiteTh;
@@ -2753,6 +3008,7 @@ async function enterBroadcast(){
     drawOverlay();
     startProcessingLoop();
     startPeerHost();
+    requestWakeLock();
     if(!localStorage.getItem('goboard.tutDone')){
       const tm = $('tutModal');
       if(tm){ tm.style.display = 'flex'; }
@@ -2768,7 +3024,9 @@ async function enterBroadcast(){
         `路盤: ${saved.size}路 / 手数: ${saved.moves.length} / ${ageStr}\n` +
         `${saved.blackName||'(黒)'} vs ${saved.whiteName||'(白)'}` +
         (saved.gameName ? `\n対局名: ${saved.gameName}` : '');
-      setTimeout(()=>{
+      S._restorePromptTimer = setTimeout(()=>{
+        S._restorePromptTimer = null;
+        if(S.mode !== 'broadcast') return;  // user left before timer fired
         showCalibPrompt(
           desc.replace(/\n/g, '<br>'),
           ()=>{ if(restoreFromSnapshot(saved)) toast('前回の対局を復元しました'); },
@@ -2783,7 +3041,10 @@ async function enterBroadcast(){
                 list.unshift({ ts: saved.ts, moves: saved.moves.length, result: saved.result, blackName: saved.blackName, whiteName: saved.whiteName, gameName: saved.gameName, sgf });
                 while(list.length > 20) list.pop();
                 localStorage.setItem(ARCHIVED_GAMES_KEY, JSON.stringify(list));
-              }catch(e){}
+                renderArchivePanel();
+              }catch(e){
+                if(e && e.name === 'QuotaExceededError') toast('⚠ ストレージ容量が不足しています。古いアーカイブを削除してください', true);
+              }
               clearGameSnapshot();
             }, null, '破棄する');
           },
@@ -2820,9 +3081,17 @@ async function retryCamera(){
 function exitBroadcast(){
   stopProcessingLoop();
   stopCamera();
+  releaseWakeLock();
   if(S.peer){ try{ S.peer.destroy(); }catch(e){} S.peer = null; }
   S.conns = [];
   S.connInfo = null;
+  if(S._pendingDeparts){ S._pendingDeparts.forEach(t=>clearTimeout(t)); S._pendingDeparts = null; }
+  // Cancel any pending restore prompt and close floating fixed panels
+  if(S._restorePromptTimer){ clearTimeout(S._restorePromptTimer); S._restorePromptTimer = null; }
+  S.showCalibGuide = false;
+  const cp = $('calibPrompt'); if(cp) cp.style.display = 'none';
+  const rp = $('resignPanel'); if(rp) rp.style.display = 'none';
+  const tm = $('tutModal'); if(tm) tm.style.display = 'none';
   showScreen('modeSelect');
 }
 function enterView(shortId){
@@ -2834,12 +3103,13 @@ function enterView(shortId){
   S.vAtLive = true;
   S.vIsPlaying = false;
   S.vPrevMoveCount = 0;
+  S.vLatestState = null;
   if(S.vPlayHandle){ clearInterval(S.vPlayHandle); S.vPlayHandle = null; }
+  clearTimeout(S.reconnectTimer); S.reconnectTimer = null;
   $('vSlider').max = 0; $('vSlider').value = 0;
-  $('vMoveLabel').textContent = '0';
-  $('vMoveTotal').textContent = '0';
+  _reconnectAttempts = 0; // reset backoff on fresh view entry
   startPeerViewer(shortId);
-  drawBoardCanvas('boardV', { size: S.size, committed: null });
+  renderViewerBoard();  // resets all viewer UI labels via the null-data early-return path
 }
 function exitView(){
   viewerStopPlayback();
@@ -2855,7 +3125,12 @@ function setActiveSize(n){
 }
 function changeSize(n){
   if(n === S.size) return;
+  archiveCurrentGame();
+  clearGameSnapshot();
+  renderArchivePanel();
   S.size = n;
+  S.showCalibGuide = false;
+  const _cpCs = $('calibPrompt'); if(_cpCs) _cpCs.style.display = 'none';
   initDetectionState();
   S.moves = [];
   S.movesInitialized = false;
@@ -2930,6 +3205,7 @@ function init(){
     saveSettings();
     if($('vNameEdit')) $('vNameEdit').value = S.viewerName;
   });
+  $('viewerNameInput').addEventListener('keydown', e=>{ if(e.key === 'Enter') tryEnterView(); });
 
   // Broadcaster controls
   $('bExit').addEventListener('click', exitBroadcast);
@@ -2975,6 +3251,7 @@ function init(){
     $('nudgeDown').addEventListener('click',  ()=> doNudge(0,  NUDGE_PX));
     $('nudgeLeft').addEventListener('click',  ()=> doNudge(-NUDGE_PX, 0));
     $('nudgeRight').addEventListener('click', ()=> doNudge( NUDGE_PX, 0));
+    refreshNudgeSel();
   }
   document.querySelectorAll('.sizeBtns button').forEach(b=>{
     b.addEventListener('click', ()=>changeSize(+b.dataset.size));
@@ -2990,6 +3267,7 @@ function init(){
   });
   $('dbgOverlay').addEventListener('change', e=>{ S.dbgOverlay = e.target.checked; saveSettings(); drawOverlay(); });
   $('calibMode').addEventListener('change', e=>{
+    if(!['free','square','trapezoid'].includes(e.target.value)) return;
     S.calibMode = e.target.value;
     if(S.calibMode === 'square'){
       fitSquareToCorners();
@@ -3012,7 +3290,15 @@ function init(){
     toast('↕ 上下反転しました（遠近入替）');
   });
   $('autoTurn').addEventListener('change', e=>{ S.autoTurn = e.target.checked; saveSettings(); });
-  $('trackMoves').addEventListener('change', e=>{ S.trackMoves = e.target.checked; saveSettings(); });
+  $('trackMoves').addEventListener('change', e=>{
+    S.trackMoves = e.target.checked;
+    // When re-enabling mid-game, the committed board may have drifted from
+    // prevCommitted (which froze at the last sync). Re-sync now so the next
+    // trackMoves() call doesn't interpret the accumulated drift as a flood
+    // of new moves.
+    if(S.trackMoves && S.gameStarted && S.committed) syncPrevToCommitted();
+    saveSettings();
+  });
   $('soundOn').addEventListener('change', e=>{
     S.soundOn = e.target.checked;
     saveSettings();
@@ -3020,9 +3306,9 @@ function init(){
   });
   $('showMoveNum').addEventListener('change', e=>{ S.showMoveNum = e.target.checked; saveSettings(); drawBoardCanvas('boardB'); });
   function onPlayerNameChange(){
-    S.blackName = $('blackName').value.trim();
-    S.whiteName = $('whiteName').value.trim();
-    S.gameName = $('gameName').value.trim();
+    S.blackName = $('blackName').value.trim().slice(0, 64);
+    S.whiteName = $('whiteName').value.trim().slice(0, 64);
+    S.gameName = $('gameName').value.trim().slice(0, 80);
     saveSettings();
     broadcastState();
   }
@@ -3047,7 +3333,12 @@ function init(){
     saveGameSnapshot();
   });
   $('btnReset').addEventListener('click', ()=>{
+    archiveCurrentGame();
+    clearGameSnapshot();
+    renderArchivePanel();
     S.corners = defaultCorners();
+    S.showCalibGuide = false;
+    const _cpReset = $('calibPrompt'); if(_cpReset) _cpReset.style.display = 'none';
     initDetectionState();
     S.movesInitialized = false;
     S.initialPosition = null;
@@ -3065,9 +3356,14 @@ function init(){
   });
   $('btnRotate').addEventListener('click', ()=>{
     if(!S.corners) return;
+    archiveCurrentGame();
+    clearGameSnapshot();
+    renderArchivePanel();
     // Rotate corner labels 90° CW: TL←BL, TR←TL, BR←TR, BL←BR
     S.corners = [S.corners[3], S.corners[0], S.corners[1], S.corners[2]];
     S.boardRotation = (S.boardRotation + 1) & 3;
+    S.showCalibGuide = false;
+    const _cpRot = $('calibPrompt'); if(_cpRot) _cpRot.style.display = 'none';
     initDetectionState();
     S.movesInitialized = false;
     S.initialPosition = null;
@@ -3086,6 +3382,11 @@ function init(){
   });
   $('btnStart').addEventListener('click', ()=>{
     if(!S.committed){ toast('まだ盤面が認識されていません', true); return; }
+    // Warn if the detection is currently unstable (might capture wrong initial position)
+    if(S.consecutiveRejects > 5){
+      toast('⚠ 認識が不安定です。「安定」になってから開始してください', true);
+      return;
+    }
     S.initialPosition = snapshotCommitted();
     syncPrevToCommitted();
     S.movesInitialized = true;
@@ -3107,11 +3408,13 @@ function init(){
     showCalibPrompt('現在の手数をリセットして、<br>いまの盤面を1手目の前として始め直しますか？', ()=>{
       // Archive the previous game before resetting
       archiveCurrentGame();
+      renderArchivePanel();
       S.initialPosition = snapshotCommitted();
       syncPrevToCommitted();
       S.movesInitialized = true;
       S.moves = [];
       S.suspiciousFrames = 0;
+      S.lastMotionTime = 0;
       S.gameStarted = true;
       S.result = '';
       $('result').value = '';
@@ -3125,6 +3428,9 @@ function init(){
     });
   });
   $('btnRecalib').addEventListener('click', ()=>{
+    archiveCurrentGame();
+    clearGameSnapshot();
+    renderArchivePanel();
     initDetectionState();
     S.movesInitialized = false;
     S.initialPosition = null;
@@ -3144,6 +3450,23 @@ function init(){
     let stoneCount = 0;
     for(const row of S.committed) for(const c of row) if(c !== '.') stoneCount++;
     const doCapture = ()=>{
+      // Sanity-check: warn if the board appears very dark (lens cover?) or
+      // overexposed (strong glare), as this would produce a useless reference.
+      const refMedian = S._lastVs ? (()=>{
+        const sorted = Array.from(S._lastVs).sort((a,b)=>a-b);
+        return sorted[sorted.length >> 1];
+      })() : 128;
+      if(refMedian < 20){
+        toast('⚠ 画面が暗すぎます。カメラのレンズや露出を確認してから再度記録してください。', true);
+        return;
+      }
+      if(refMedian > 240){
+        toast('⚠ 画面が明るすぎます（白飛び）。照明を調整してから再度記録してください。', true);
+        return;
+      }
+      archiveCurrentGame();
+      clearGameSnapshot();
+      renderArchivePanel();
       S.refBoard = {
         size: S.size,
         V: new Float32Array(S._lastVs),
@@ -3158,7 +3481,8 @@ function init(){
       $('moveCount').textContent = 0;
       updateGameStateUI();
       updateRefBoardUI();
-      toast('空の盤面を記録しました - これを基準に判定します');
+      saveSettings();
+      toast(`空の盤面を記録しました（基準輝度 ${Math.round(refMedian)}）`);
     };
     if(stoneCount > 0){
       showCalibPrompt(
@@ -3170,6 +3494,9 @@ function init(){
     }
   });
   $('btnClearRef').addEventListener('click', ()=>{
+    archiveCurrentGame();
+    clearGameSnapshot();
+    renderArchivePanel();
     S.refBoard = null;
     initDetectionState();
     S.gameStarted = false;
@@ -3179,6 +3506,7 @@ function init(){
     $('moveCount').textContent = 0;
     updateGameStateUI();
     updateRefBoardUI();
+    saveSettings();
     toast('基準をクリア - 自動の局所基準で判定します');
   });
   // All inline dialogs below replace native confirm()/prompt() because those
@@ -3248,6 +3576,7 @@ function init(){
           }
           S.stoneCalib = { size: N, blackV: bV, whiteV: wV, blackS: bS, whiteS: wS, ts: Date.now() };
           updateStoneCalibUI();
+          saveSettings();
           toast(`見本を記録（黒V=${bV.toFixed(0)} / 白V=${wV.toFixed(0)}）`);
           // Step 3: ask to remove stones, then snap the detection state.
           showCalibPrompt(
@@ -3257,6 +3586,9 @@ function init(){
             '<span style="color:#aaa;font-size:.78rem">（OK で盤面をリセットして、取り除いた状態から認識を開始します）</span></span>',
             ()=>{
               S.showCalibGuide = false;
+              archiveCurrentGame();
+              clearGameSnapshot();
+              renderArchivePanel();
               initDetectionState();
               S.gameStarted = false;
               S.moves = [];
@@ -3284,6 +3616,9 @@ function init(){
       );
   });
   $('btnClearCalib').addEventListener('click', ()=>{
+    archiveCurrentGame();
+    clearGameSnapshot();
+    renderArchivePanel();
     S.stoneCalib = null;
     initDetectionState();
     S.gameStarted = false;
@@ -3293,6 +3628,7 @@ function init(){
     $('moveCount').textContent = 0;
     updateGameStateUI();
     updateStoneCalibUI();
+    saveSettings();
     toast('黒白の見本をクリアしました');
   });
   $('btnSGF').addEventListener('click', generateSGF);
@@ -3302,7 +3638,7 @@ function init(){
       if(!blob){ toast('PNG生成に失敗', true); return; }
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
-      const stamp = new Date().toISOString().slice(0,19).replace(/[:T]/g,'');
+      const stamp = new Date().toISOString().slice(0,19).replace('T','_').replace(/:/g,'');
       a.href = url; a.download = 'goboard_' + stamp + '.png';
       document.body.appendChild(a); a.click(); a.remove();
       setTimeout(()=>URL.revokeObjectURL(url), 1000);
@@ -3317,6 +3653,9 @@ function init(){
       S.history[m.x][m.y] = Array.from({length:S.histDepth}, ()=>'.');
       S.prevCommitted[m.x][m.y] = '.';
     }
+    // When autoTurn is off, turn is not recalculated from stone counts, so we
+    // restore it to the color that made the undone move (they play again).
+    if(!S.autoTurn) S.turn = m.c;
     $('moveCount').textContent = S.moves.length;
     drawBoardCanvas('boardB');
     drawOverlay();
@@ -3399,6 +3738,10 @@ function init(){
   }
   $('bChatSend').addEventListener('click', sendBChat);
   $('bChatInput').addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); sendBChat(); } });
+  // Archive panel: render lazily when opened
+  document.querySelectorAll('details').forEach(d=>{
+    d.addEventListener('toggle', ()=>{ if(d.open && d.querySelector('#archiveList')) renderArchivePanel(); });
+  });
   // Chat: viewer
   function sendVChat(){
     const v = $('vChatInput').value.trim();
@@ -3460,6 +3803,7 @@ function init(){
     renderViewerBoard();
   });
   $('vFwd').addEventListener('click', ()=>{
+    viewerStopPlayback();
     const total = viewerTotalMoves();
     S.vViewIndex = Math.min(total, S.vViewIndex + 1);
     S.vAtLive = (S.vViewIndex === total);
@@ -3506,10 +3850,15 @@ function init(){
   attachOverlayInput();
   attachBoardEdit();
 
-  // Render loop for overlay (decoupled from detection so handles look smooth)
-  function ovLoop(){
-    if(S.mode === 'broadcast') drawOverlay();
+  // Render loop for overlay — capped at ~15 fps to avoid burning mobile CPU/GPU.
+  // Corner handles only move on user interaction, so 15 fps is imperceptible.
+  let _ovLastT = 0;
+  function ovLoop(t){
     requestAnimationFrame(ovLoop);
+    if(S.mode !== 'broadcast') return;
+    if(t - _ovLastT < 64) return; // ~15 fps cap
+    _ovLastT = t;
+    drawOverlay();
   }
   requestAnimationFrame(ovLoop);
 
