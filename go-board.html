@@ -2345,22 +2345,31 @@ function drawBoardCanvas(canvasId, override){
     });
     ctx.restore();
   }
-  // "↑ 上" indicator — always upright at the visual top of the canvas
+  // "● 黒番" edge indicator — always upright, placed at the edge where Black's
+  // star-point column (i=N-1) appears after applying boardRotation.
+  // rot=0 → right edge, rot=1 → bottom, rot=2 → left, rot=3 → top.
   {
-    const indFs = Math.max(11, Math.round(W * 0.040));
+    const indFs = Math.max(11, Math.round(W * 0.038));
     ctx.save();
     ctx.font = `bold ${indFs}px sans-serif`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    const indText = '↑ 上';
+    const indText = '● 黒番';
     const tw = ctx.measureText(indText).width;
     const padX = 8, padY = 4;
     const bw = tw + padX*2, bh = indFs + padY*2;
-    const bx = W/2 - bw/2, by = 3;
-    ctx.fillStyle = 'rgba(26,18,8,0.70)';
+    const pad = 3;
+    let bx, by;
+    switch(rot & 3){
+      case 0: bx = W - bw - pad; by = W/2 - bh/2; break;  // right edge
+      case 1: bx = W/2 - bw/2; by = W - bh - pad; break;  // bottom edge
+      case 2: bx = pad; by = W/2 - bh/2; break;            // left edge
+      default: bx = W/2 - bw/2; by = pad; break;           // top edge
+    }
+    ctx.fillStyle = 'rgba(26,18,8,0.80)';
     ctx.fillRect(bx, by, bw, bh);
     ctx.fillStyle = '#f4d03f';
-    ctx.fillText(indText, W/2, by + bh/2);
+    ctx.fillText(indText, bx + bw/2, by + bh/2);
     ctx.restore();
   }
 }
@@ -3387,8 +3396,10 @@ function init(){
     archiveCurrentGame();
     clearGameSnapshot();
     renderArchivePanel();
-    // Rotate corner labels 90° CW: TL←BL, TR←TL, BR←TR, BL←BR
-    S.corners = [S.corners[3], S.corners[0], S.corners[1], S.corners[2]];
+    // Rotate the visual display 90° CW. Corner positions stay unchanged —
+    // the homography keeps detecting the same physical intersections, we just
+    // view them from a rotated angle.  Black's star-point column (i=N-1) moves
+    // visually: rot=0 right, rot=1 bottom, rot=2 left, rot=3 top.
     S.boardRotation = (S.boardRotation + 1) & 3;
     S.showCalibGuide = false;
     const _cpRot = $('calibPrompt'); if(_cpRot) _cpRot.style.display = 'none';
@@ -3406,7 +3417,8 @@ function init(){
     saveSettings();
     drawOverlay();
     drawBoardCanvas('boardB');
-    toast('↻ 時計回りに90°回転しました（左上→右上→右下→左下）');
+    const rotLabels = ['右', '下', '左', '上'];
+    toast(`↻ 表示を90°回転（黒番側は${rotLabels[S.boardRotation]}端）`);
   });
   $('btnStart').addEventListener('click', ()=>{
     if(!S.committed){ toast('まだ盤面が認識されていません', true); return; }
@@ -3578,17 +3590,28 @@ function init(){
     const sp = CORNER_STAR_POINTS[N];
     if(!sp){ toast(N+'路盤の星座標が未登録です', true); return; }
     if(!S._lastVs || S._lastVs.length !== N*N){ toast('まだ盤面が認識できていません', true); return; }
-    // Draw guide markers on the virtual board (user can scroll down to see them)
-    // but do NOT scrollIntoView — that pushes the camera off-screen and freezes
-    // the iOS video feed. The confirm panel is position:fixed so no scroll needed.
-    S.showCalibGuide = true;
-    drawBoardCanvas('boardB');
+    // Step 0: nigiri reminder — determine who plays Black before calibration.
+    const rotEdgeLabels = ['右', '下', '左', '上'];
+    const blackEdge = rotEdgeLabels[(S.boardRotation || 0) & 3];
     showCalibPrompt(
+      '<span style="color:#f4d03f;font-weight:700">ニギリ（黒番決定）を先に行ってください</span><br>' +
+      '<span style="color:#fff;font-weight:400;font-size:.85rem">' +
+      '白石を握り、相手が偶数か奇数かを言い当てた方が先手（黒）です。<br>' +
+      '黒番が決まったら、黒石を持つ方を確認してから OK を押してください。<br>' +
+      `<span style="color:#aaa;font-size:.78rem">（黒番は仮想盤の<b style="color:#f4d03f">${blackEdge}側</b>に座る方です）</span></span>`,
+      ()=>{
+        // Step 1: show calibration guide and prompt.
+        // Draw guide markers on the virtual board (user can scroll down to see them)
+        // but do NOT scrollIntoView — that pushes the camera off-screen and freezes
+        // the iOS video feed. The confirm panel is position:fixed so no scroll needed.
+        S.showCalibGuide = true;
+        drawBoardCanvas('boardB');
+        showCalibPrompt(
         '仮想盤に表示された印の通りに石を置いてください<br>' +
         '<span style="color:#fff;font-weight:400;font-size:.85rem">' +
-        '●黒石 → 右上・右下 の星<br>' +
-        '○白石 → 左上・左下 の星<br>' +
-        '<span style="color:#aaa;font-size:.78rem">（盤面正面＝対局者目線。撮影者目線ではありません）</span></span><br>' +
+        `●黒石 → 仮想盤の<b>${blackEdge}端</b>にある 2 つの星<br>` +
+        `○白石 → 仮想盤の反対側（${blackEdge === '右' ? '左' : blackEdge === '左' ? '右' : blackEdge === '上' ? '下' : '上'}端）にある 2 つの星<br>` +
+        '<span style="color:#aaa;font-size:.78rem">（仮想盤に表示された印を見て確認してください）</span></span><br>' +
         '置き終わったら下の OK を押してください',
         ()=>{
           let bV = 0, wV = 0, bS = 0, wS = 0;
@@ -3641,7 +3664,9 @@ function init(){
           S.showCalibGuide = false;
           drawBoardCanvas('boardB');
         }
-      );
+        );
+      }  // end nigiri ok
+    );  // end outer (nigiri) showCalibPrompt
   });
   $('btnClearCalib').addEventListener('click', ()=>{
     archiveCurrentGame();
