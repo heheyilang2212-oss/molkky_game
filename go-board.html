@@ -3105,6 +3105,7 @@ function enterView(shortId){
   S.vPrevMoveCount = 0;
   S.vLatestState = null;
   if(S.vPlayHandle){ clearInterval(S.vPlayHandle); S.vPlayHandle = null; }
+  clearTimeout(S.reconnectTimer); S.reconnectTimer = null;
   $('vSlider').max = 0; $('vSlider').value = 0;
   _reconnectAttempts = 0; // reset backoff on fresh view entry
   startPeerViewer(shortId);
@@ -3204,6 +3205,7 @@ function init(){
     saveSettings();
     if($('vNameEdit')) $('vNameEdit').value = S.viewerName;
   });
+  $('viewerNameInput').addEventListener('keydown', e=>{ if(e.key === 'Enter') tryEnterView(); });
 
   // Broadcaster controls
   $('bExit').addEventListener('click', exitBroadcast);
