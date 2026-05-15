@@ -2969,6 +2969,7 @@ async function enterBroadcast(){
   S.suspiciousFrames = 0;
   S.gameStarted = false;
   S.showCalibGuide = false;
+  S.result = '';
   S.connInfo = new Map();
   S.chat = [];
   renderChat();
@@ -3089,6 +3090,7 @@ function exitBroadcast(){
   S.showCalibGuide = false;
   const cp = $('calibPrompt'); if(cp) cp.style.display = 'none';
   const rp = $('resignPanel'); if(rp) rp.style.display = 'none';
+  const tm = $('tutModal'); if(tm) tm.style.display = 'none';
   showScreen('modeSelect');
 }
 function enterView(shortId){
