@@ -796,6 +796,7 @@ function restoreFromSnapshot(snap){
   drawBoardCanvas('boardB');
   drawOverlay();
   broadcastState();
+  saveGameSnapshot();
   return true;
 }
 function updateRefBoardUI(){
@@ -2523,7 +2524,7 @@ function startPeerHost(forceNewId){
         const text = (typeof data.text === 'string') ? data.text.slice(0, 300) : '';
         if(!text) return;
         const meta = S.connInfo && S.connInfo.get(conn);
-        const name = (data.name && data.name.trim()) || (meta && meta.name) || '(匿名)';
+        const name = ((data.name && data.name.trim()) || (meta && meta.name) || '(匿名)').slice(0, 32);
         broadcasterRelayChat(conn, { id: data.id, name, text, ts: data.ts || Date.now() });
       }
     });
@@ -2869,7 +2870,7 @@ function connectToHost(shortId){
     } else if(data.type === 'chat'){
       const text = (typeof data.text === 'string') ? data.text.slice(0, 300) : '';
       if(!text) return;
-      appendChat({ id: data.id, name: data.name || '(匿名)', text, ts: data.ts || Date.now(), mine: false });
+      appendChat({ id: data.id, name: (data.name || '(匿名)').slice(0, 32), text, ts: data.ts || Date.now(), mine: false });
     }
   });
   conn.on('close', ()=>{
