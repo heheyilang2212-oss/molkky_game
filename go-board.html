@@ -340,6 +340,7 @@ a{color:#7cb7ff}
       <button id="btnCalibStones" title="●黒を右上・右下の星、○白を左上・左下の星に置いてからこのボタン">🎯 黒白の見本を記録（4つの星に置く）</button>
       <button id="btnClearCalib" style="display:none">見本をクリア</button>
       <button id="btnReset">隅をリセット</button>
+      <button id="btnAutoDetect" title="カメラ映像からHough変換で碁盤の4隅を自動検出します">🔍 碁盤を自動検出</button>
       <button id="btnRotate" title="盤の左上→右上→右下→左下の割り当てを時計回りにずらします">↻ 盤を時計回りに90°回転</button>
       <button id="btnFlipTrap" style="display:none" title="カメラの上下を入れ替えます（横撮り時に遠い辺と近い辺が逆のとき使用）">↕ 上下を反転（遠近入替）</button>
       <button id="btnRecalib">再キャリブレ</button>
@@ -1297,6 +1298,140 @@ function resetAllSettings(){
   saveSettings();
   broadcastState();
 }
+// Automatic board corner detection using Sobel edges + Hough line transform.
+// Detects the four sides of the Go board from the current camera frame and
+// sets S.corners to the computed intersections.
+function autoDetectBoardCorners(){
+  const vid = S.videoEl;
+  if(!vid || !vid.videoWidth){ toast('カメラが起動していません', true); return; }
+  const cnv = S.procCanvas, ctx = S.procCtx;
+  const W = cnv.width, H = cnv.height;
+  ctx.drawImage(vid, 0, 0, W, H);
+  let imgData;
+  try{ imgData = ctx.getImageData(0, 0, W, H); }
+  catch(e){ toast('フレーム取得エラー', true); return; }
+  const pix = imgData.data;
+
+  // Grayscale
+  const gray = new Float32Array(W * H);
+  for(let i = 0; i < W * H; i++)
+    gray[i] = 0.299*pix[i*4] + 0.587*pix[i*4+1] + 0.114*pix[i*4+2];
+
+  // Sobel edge magnitude
+  const edge = new Float32Array(W * H);
+  let maxEdge = 0;
+  for(let y = 1; y < H-1; y++){
+    for(let x = 1; x < W-1; x++){
+      const gx = (-gray[(y-1)*W+(x-1)] - 2*gray[y*W+(x-1)] - gray[(y+1)*W+(x-1)]
+                  +gray[(y-1)*W+(x+1)] + 2*gray[y*W+(x+1)] + gray[(y+1)*W+(x+1)]);
+      const gy = (-gray[(y-1)*W+(x-1)] - 2*gray[(y-1)*W+x] - gray[(y-1)*W+(x+1)]
+                  +gray[(y+1)*W+(x-1)] + 2*gray[(y+1)*W+x] + gray[(y+1)*W+(x+1)]);
+      const m = Math.sqrt(gx*gx + gy*gy);
+      edge[y*W+x] = m;
+      if(m > maxEdge) maxEdge = m;
+    }
+  }
+
+  // Hough line transform: theta=0..179°, rho=[-diag..+diag]
+  const diag = Math.ceil(Math.sqrt(W*W + H*H));
+  const NT = 180, NR = 2*diag + 1;
+  const accum = new Int32Array(NT * NR);
+  const cosT = new Float32Array(NT), sinT = new Float32Array(NT);
+  for(let t = 0; t < NT; t++){
+    cosT[t] = Math.cos(t * Math.PI / NT);
+    sinT[t] = Math.sin(t * Math.PI / NT);
+  }
+  const edgeThresh = maxEdge * 0.15;
+  for(let y = 1; y < H-1; y++){
+    for(let x = 1; x < W-1; x++){
+      if(edge[y*W+x] < edgeThresh) continue;
+      for(let t = 0; t < NT; t++){
+        const rho = Math.round(x*cosT[t] + y*sinT[t]) + diag;
+        if(rho >= 0 && rho < NR) accum[t*NR+rho]++;
+      }
+    }
+  }
+
+  // Find global maximum, then NMS peak picking
+  let maxAccum = 0;
+  for(let i = 0; i < accum.length; i++) if(accum[i] > maxAccum) maxAccum = accum[i];
+  const peakThresh = Math.max(30, maxAccum * 0.3);
+  const DT = 15, DR = 20;
+  const peaks = [];
+  for(let t = 0; t < NT; t++){
+    for(let r = 0; r < NR; r++){
+      const val = accum[t*NR+r];
+      if(val < peakThresh) continue;
+      let isMax = true;
+      outer: for(let dt = -DT; dt <= DT; dt++){
+        for(let dr = -DR; dr <= DR; dr++){
+          if(dt === 0 && dr === 0) continue;
+          const tt = ((t+dt)%NT+NT)%NT;
+          const rr = r+dr;
+          if(rr < 0 || rr >= NR) continue;
+          if(accum[tt*NR+rr] > val){ isMax = false; break outer; }
+        }
+      }
+      if(isMax) peaks.push({ t, r: r-diag, v: val });
+    }
+  }
+  peaks.sort((a, b) => b.v - a.v);
+
+  // Classify by angle: horizontal (theta 65-115°) vs vertical (theta <=25° or >=155°)
+  const hLines = [], vLines = [];
+  for(const p of peaks){
+    if(p.t >= 65 && p.t <= 115) hLines.push(p);
+    else if(p.t <= 25 || p.t >= 155) vLines.push(p);
+  }
+  if(hLines.length < 2 || vLines.length < 2){
+    toast('碁盤の辺が検出できませんでした。碁盤を画角に収めてください。', true);
+    return;
+  }
+
+  // From top-20 strongest candidates, pick the pair with most extreme rho (board edges)
+  const hCands = hLines.slice(0, Math.min(20, hLines.length));
+  const vCands = vLines.slice(0, Math.min(20, vLines.length));
+  hCands.sort((a, b) => a.r - b.r);
+  vCands.sort((a, b) => a.r - b.r);
+  const topH = hCands[0], botH = hCands[hCands.length-1];
+  const leftV = vCands[0], rightV = vCands[vCands.length-1];
+
+  // Intersect two Hough lines (x*cos(t)+y*sin(t)=rho)
+  function intersectLines(l1, l2){
+    const a1=cosT[l1.t], b1=sinT[l1.t], c1=l1.r;
+    const a2=cosT[l2.t], b2=sinT[l2.t], c2=l2.r;
+    const det = a1*b2 - a2*b1;
+    if(Math.abs(det) < 1e-6) return null;
+    return { x: (c1*b2-c2*b1)/det, y: (a1*c2-a2*c1)/det };
+  }
+  const TL = intersectLines(topH, leftV);
+  const TR = intersectLines(topH, rightV);
+  const BR = intersectLines(botH, rightV);
+  const BL = intersectLines(botH, leftV);
+  if(!TL||!TR||!BR||!BL){ toast('碁盤の角の計算に失敗しました', true); return; }
+
+  // Reject if any corner is more than 50% outside the frame
+  for(const p of [TL,TR,BR,BL]){
+    if(p.x < -W*0.5 || p.x > W*1.5 || p.y < -H*0.5 || p.y > H*1.5){
+      toast('検出された碁盤が画角外です。碁盤を画角に収めてください。', true);
+      return;
+    }
+  }
+
+  S.corners = [
+    {x: clamp(TL.x/W,0,1), y: clamp(TL.y/H,0,1)},
+    {x: clamp(TR.x/W,0,1), y: clamp(TR.y/H,0,1)},
+    {x: clamp(BR.x/W,0,1), y: clamp(BR.y/H,0,1)},
+    {x: clamp(BL.x/W,0,1), y: clamp(BL.y/H,0,1)},
+  ];
+  if(S.calibMode === 'square') fitSquareToCorners();
+  else if(S.calibMode === 'trapezoid') fitTrapezoidToCorners();
+  drawOverlay();
+  saveSettings();
+  broadcastState();
+  toast('碁盤の角を自動検出しました。ドラッグで微調整できます。');
+}
+
 function resizeOverlay(){
   const ov = $('overlay');
   const v = $('cam');
@@ -3484,6 +3619,7 @@ function init(){
     drawOverlay();
     toast('隅をリセットしました - ドラッグで合わせて下さい');
   });
+  $('btnAutoDetect').addEventListener('click', autoDetectBoardCorners);
   $('btnRotate').addEventListener('click', ()=>{
     if(!S.corners) return;
     archiveCurrentGame();
