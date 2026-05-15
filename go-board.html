@@ -975,7 +975,31 @@ function loadSettings(){
     if(j.stoneCalib && typeof j.stoneCalib.blackV === 'number') S.stoneCalib = j.stoneCalib;
   }catch(e){}
 }
+// Coalesce rapid saves (slider drags fire dozens of input events per second)
+// so we don't re-serialize the ~5KB refBoard payload on every step. A 200ms
+// trailing-edge debounce is invisible to users but avoids the cost. We also
+// flush on pagehide/visibilitychange so the latest state survives a quick
+// close or tab switch.
+let _saveSettingsTimer = null;
 function saveSettings(){
+  if(_saveSettingsTimer) clearTimeout(_saveSettingsTimer);
+  _saveSettingsTimer = setTimeout(()=>{
+    _saveSettingsTimer = null;
+    saveSettingsNow();
+  }, 200);
+}
+function flushSaveSettings(){
+  if(_saveSettingsTimer){
+    clearTimeout(_saveSettingsTimer);
+    _saveSettingsTimer = null;
+    saveSettingsNow();
+  }
+}
+window.addEventListener('pagehide', flushSaveSettings);
+document.addEventListener('visibilitychange', ()=>{
+  if(document.visibilityState === 'hidden') flushSaveSettings();
+});
+function saveSettingsNow(){
   try{
     localStorage.setItem(STORAGE_KEY, JSON.stringify({
       size: S.size,
