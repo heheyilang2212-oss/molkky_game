@@ -2365,7 +2365,10 @@ function drawBoardCanvas(canvasId, override){
   if(S.showCalibGuide && canvasId === 'boardB'){
     const gfs = Math.max(10, Math.round(W * 0.034));
     ctx.save();
-    const glines = ['【盤面正面（対局者目線）から見て】', '●黒 → 右上・右下 の星に置く', '○白 → 左上・左下 の星に置く'];
+    const _rotEdge = ['右', '下', '左', '上'];
+    const _bEdge = _rotEdge[(rot) & 3];
+    const _wEdge = _rotEdge[(rot + 2) & 3];
+    const glines = [`【仮想盤に表示された印の位置に置いてください】`, `●黒 → ${_bEdge}端 の 2 つの星に置く`, `○白 → ${_wEdge}端 の 2 つの星に置く`];
     const glh = gfs * 1.6;
     const gbh = glines.length * glh + 10;
     const gbw = W * 0.84;
@@ -3418,8 +3421,9 @@ function init(){
     S.initialPosition = null;
     S.gameStarted = false;
     S.moves = [];
-    S.refBoard = null;
-    S.stoneCalib = null;
+    // Do NOT clear S.refBoard or S.stoneCalib: boardRotation only rotates the
+    // display canvas; the detection homography keeps sampling the exact same
+    // physical pixels, so brightness-based calibration remains valid.
     $('moveCount').textContent = 0;
     updateGameStateUI();
     updateRefBoardUI();
