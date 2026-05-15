@@ -2065,17 +2065,45 @@ function trackMoves(){
   }
   if(newOnes.length === 0){
     if(removals > 0){
-      // Stones disappeared with no new placement — almost certainly a
-      // misdetection flicker, NOT a real capture (in Go, captures only happen
-      // when a stone is placed). Keep prevCommitted unchanged so that when
-      // the stone reappears it is NOT counted as a new move.
+      // Stones disappeared with no new placement — cannot be a real capture
+      // (in Go, captures only happen when a stone is placed). Keep
+      // prevCommitted unchanged so a transient flicker (the stone reappearing
+      // shortly after) is NOT counted as a new move.
       // Count FRAMES (not stones) so a large legitimate capture that spans
       // two detection frames doesn't prematurely fire the stale toast.
       S.suspiciousFrames++;
       if(S.suspiciousFrames > 40){
+        // Sustained removal: the stone never reappeared, so the original
+        // detection was a phantom (misrecognition). Rewind the move(s) that
+        // recorded the phantom appearance so the move count stays accurate.
+        // For each position where prev had a stone but committed is empty,
+        // find the most recent matching placement in S.moves and remove it.
+        let rewound = 0;
+        for(let i=0;i<N;i++) for(let j=0;j<N;j++){
+          const a = S.prevCommitted[i][j], b = S.committed[i][j];
+          if(a !== '.' && b === '.'){
+            for(let k = S.moves.length - 1; k >= 0; k--){
+              const m = S.moves[k];
+              if(m.x === i && m.y === j && m.c === a){
+                S.moves.splice(k, 1);
+                rewound++;
+                break;
+              }
+            }
+          }
+        }
         syncPrevToCommitted();
         S.suspiciousFrames = 0;
-        toast('認識が不安定です。基準位置を再同期しました', true);
+        if(rewound > 0){
+          $('moveCount').textContent = S.moves.length;
+          saveGameSnapshot();
+          broadcastState();
+          toast(`誤認識を検出: ${rewound}手を取消しました`, true);
+        } else {
+          // Disappeared stones had no matching move (e.g. handicap setup or
+          // initial position) — just resync without altering history.
+          toast('認識が不安定です。基準位置を再同期しました', true);
+        }
       }
     } else {
       syncPrevToCommitted();
