@@ -2323,6 +2323,28 @@ function drawBoardCanvas(canvasId, override){
   }
   // Calibration guide: stone placement indicators (drawn inside rotation so positions are correct)
   if(S.showCalibGuide && canvasId === 'boardB') drawCalibGuide(ctx, N, W, margin, step);
+  // "● 黒番" indicator — drawn INSIDE the rotation transform so it tracks
+  // Black's column (i=N-1 = right edge in board space) automatically.
+  // The badge rectangle rides with the board; text is counter-rotated to stay upright.
+  {
+    const indFs = Math.max(11, Math.round(W * 0.038));
+    ctx.font = `bold ${indFs}px sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const indText = '● 黒番';
+    const tw = ctx.measureText(indText).width;
+    const padX = 8, padY = 4;
+    const bw = tw + padX*2, bh = indFs + padY*2;
+    const bx = W - bw - 3, by = W/2 - bh/2;
+    ctx.fillStyle = 'rgba(26,18,8,0.85)';
+    ctx.fillRect(bx, by, bw, bh);
+    ctx.save();
+    ctx.translate(bx + bw/2, by + bh/2);
+    if(rot) ctx.rotate(-rot * Math.PI/2);
+    ctx.fillStyle = '#f4d03f';
+    ctx.fillText(indText, 0, 0);
+    ctx.restore();
+  }
   ctx.restore(); // end board rotation
   // Calibration guide instruction banner (outside rotation — always upright at bottom)
   if(S.showCalibGuide && canvasId === 'boardB'){
@@ -2343,33 +2365,6 @@ function drawBoardCanvas(canvasId, override){
       ctx.font = (ti === 0 ? '' : 'bold ') + gfs + 'px sans-serif';
       ctx.fillText(line, W/2, gby + 5 + ti * glh);
     });
-    ctx.restore();
-  }
-  // "● 黒番" edge indicator — always upright, placed at the edge where Black's
-  // star-point column (i=N-1) appears after applying boardRotation.
-  // rot=0 → right edge, rot=1 → bottom, rot=2 → left, rot=3 → top.
-  {
-    const indFs = Math.max(11, Math.round(W * 0.038));
-    ctx.save();
-    ctx.font = `bold ${indFs}px sans-serif`;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    const indText = '● 黒番';
-    const tw = ctx.measureText(indText).width;
-    const padX = 8, padY = 4;
-    const bw = tw + padX*2, bh = indFs + padY*2;
-    const pad = 3;
-    let bx, by;
-    switch(rot & 3){
-      case 0: bx = W - bw - pad; by = W/2 - bh/2; break;  // right edge
-      case 1: bx = W/2 - bw/2; by = W - bh - pad; break;  // bottom edge
-      case 2: bx = pad; by = W/2 - bh/2; break;            // left edge
-      default: bx = W/2 - bw/2; by = pad; break;           // top edge
-    }
-    ctx.fillStyle = 'rgba(26,18,8,0.80)';
-    ctx.fillRect(bx, by, bw, bh);
-    ctx.fillStyle = '#f4d03f';
-    ctx.fillText(indText, bx + bw/2, by + bh/2);
     ctx.restore();
   }
 }
