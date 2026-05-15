@@ -2319,6 +2319,10 @@ function attachBoardEdit(){
   const cnv = $('boardB');
   cnv.addEventListener('click', (e)=>{
     if(!S.committed) return;
+    // Don't accept manual edits while the stone-calibration guide overlay is
+    // up — the user is supposed to be placing physical stones, and an accidental
+    // tap shouldn't flip cells in the recognized board.
+    if(S.showCalibGuide) return;
     const r = cnv.getBoundingClientRect();
     let px = (e.clientX - r.left) * (cnv.width / r.width);
     let py = (e.clientY - r.top) * (cnv.height / r.height);
