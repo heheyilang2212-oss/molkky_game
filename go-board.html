@@ -696,6 +696,7 @@ function viewerSendChat(text){
 // ============================================================
 const SAVED_GAME_KEY = 'goboard.savedGame.v1';
 const ARCHIVED_GAMES_KEY = 'goboard.archivedGames.v1';
+let _saveQuotaToastedAt = 0;
 function saveGameSnapshot(){
   if(!S.gameStarted) return;
   if(!S.movesInitialized) return;
@@ -713,7 +714,15 @@ function saveGameSnapshot(){
       ts: Date.now(),
     };
     localStorage.setItem(SAVED_GAME_KEY, JSON.stringify(snap));
-  }catch(e){ console.warn('saveGameSnapshot failed', e); }
+  }catch(e){
+    console.warn('saveGameSnapshot failed', e);
+    // Quota errors fire on every save attempt — throttle the toast to once
+    // per minute so the screen isn't spammed.
+    if(e && e.name === 'QuotaExceededError' && Date.now() - _saveQuotaToastedAt > 60000){
+      _saveQuotaToastedAt = Date.now();
+      toast('⚠ 容量不足で対局を保存できません。古いアーカイブを削除してください', true);
+    }
+  }
 }
 function loadGameSnapshot(){
   try{
@@ -1555,6 +1564,7 @@ function initDetectionState(){
   S._wasSettled = false;
   S.motionLevel = 0;
   S._lastGoodRef = undefined;
+  S.suspiciousFrames = 0;
 }
 function pushHistory(i, j, val){
   const buf = S.history[i][j];
@@ -2742,7 +2752,13 @@ function viewerStartPlayback(){
   if(btn){ btn.textContent = '⏸'; btn.classList.add('on'); }
   S.vPlayHandle = setInterval(()=>{
     const total = viewerTotalMoves();
-    if(S.vViewIndex >= total){ viewerStopPlayback(); return; }
+    if(S.vViewIndex >= total){
+      // Reached the live end — re-engage live mode so future moves auto-appear.
+      viewerStopPlayback();
+      S.vAtLive = true;
+      renderViewerBoard();
+      return;
+    }
     S.vViewIndex = Math.min(total, S.vViewIndex + 1);
     renderViewerBoard();
   }, 900);
@@ -3161,6 +3177,7 @@ function init(){
     $('nudgeDown').addEventListener('click',  ()=> doNudge(0,  NUDGE_PX));
     $('nudgeLeft').addEventListener('click',  ()=> doNudge(-NUDGE_PX, 0));
     $('nudgeRight').addEventListener('click', ()=> doNudge( NUDGE_PX, 0));
+    refreshNudgeSel();
   }
   document.querySelectorAll('.sizeBtns button').forEach(b=>{
     b.addEventListener('click', ()=>changeSize(+b.dataset.size));
