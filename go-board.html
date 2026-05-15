@@ -347,6 +347,8 @@ a{color:#7cb7ff}
       <button id="btnUndo">最終手を取消</button>
       <button id="btnPass">パス</button>
       <button id="btnResign">投了</button>
+      <button id="btnEndGame" style="display:none">■ 終局（記録終了）</button>
+      <button id="btnResetAll" title="校正データ・対局状態・対局者情報・検出設定をすべて初期値に戻します（棋譜履歴は残ります）" style="background:rgba(255,80,80,.10);color:#ff9b9b;border:1px solid rgba(255,80,80,.30)">⟲ すべての設定を初期化</button>
       <button class="primary full" id="btnSGF">SGFをダウンロード</button>
     </div>
     <details class="settings" style="margin-top:8px" open>
@@ -598,7 +600,7 @@ const S = {
   //  'square'    = axis-aligned square (top-down shots; tweak size + position).
   //  'trapezoid' = left/right symmetric trapezoid (for side-on shots where the
   //                far edge looks shorter than the near edge).
-  calibMode: 'free',
+  calibMode: 'square',
   // Board display rotation (0-3, incremented CW by the rotate button).
   // Rotates the virtual board canvas so it matches the physical board orientation.
   boardRotation: 0,
@@ -921,6 +923,7 @@ function updateGameStateUI(){
   const ind = document.getElementById('gameStateInd');
   const start = document.getElementById('btnStart');
   const restart = document.getElementById('btnRestart');
+  const endGame = document.getElementById('btnEndGame');
   if(!ind || !start || !restart) return;
   if(S.gameStarted){
     ind.textContent = '対局中';
@@ -928,12 +931,14 @@ function updateGameStateUI(){
     ind.style.color = '#7cffa7';
     start.style.display = 'none';
     restart.style.display = '';
+    if(endGame) endGame.style.display = '';
   } else {
     ind.textContent = '準備中（開始を押すまで手数は数えません）';
     ind.style.background = 'rgba(244,208,63,.18)';
     ind.style.color = '#f4d03f';
     start.style.display = '';
     restart.style.display = 'none';
+    if(endGame) endGame.style.display = 'none';
   }
 }
 function median(arr){
@@ -1215,6 +1220,79 @@ function defaultCorners(){
 }
 function ensureCorners(){
   if(!S.corners || S.corners.length !== 4) S.corners = defaultCorners();
+}
+// Reset all in-app settings to factory defaults. Archives (past games) and the
+// PeerJS connection (room ID) are preserved. Called from the "全設定リセット"
+// button and automatically when the room ID is regenerated.
+function resetAllSettings(){
+  archiveCurrentGame();
+  clearGameSnapshot();
+  // Board / detection
+  S.size = 19;
+  S.corners = defaultCorners();
+  S.calibMode = 'square';
+  S.boardRotation = 0;
+  S.refBoard = null;
+  S.stoneCalib = null;
+  S.showCalibGuide = false;
+  // Detection thresholds
+  S.blackTh = 55;
+  S.whiteTh = 22;
+  S.histDepth = 10;
+  S.targetFps = 8;
+  S.settleDelayMs = 2000;
+  S.dbgOverlay = false;
+  S.autoTurn = true;
+  S.trackMoves = true;
+  S.soundOn = false;
+  S.showMoveNum = false;
+  // Game / players
+  S.blackName = '';
+  S.whiteName = '';
+  S.gameName = '';
+  S.komi = 6.5;
+  S.handicap = 0;
+  S.result = '';
+  S.turn = 'B';
+  S.moves = [];
+  S.initialPosition = null;
+  S.movesInitialized = false;
+  S.gameStarted = false;
+  S.suspiciousFrames = 0;
+  S.chat = [];
+  initDetectionState();
+  // Sync UI
+  const cp = $('calibPrompt'); if(cp) cp.style.display = 'none';
+  $('blackTh').value = S.blackTh; $('blackVal').textContent = S.blackTh;
+  $('whiteTh').value = S.whiteTh; $('whiteVal').textContent = S.whiteTh;
+  $('histDepth').value = S.histDepth; $('histVal').textContent = S.histDepth;
+  $('targetFps').value = S.targetFps; $('fpsVal').textContent = S.targetFps;
+  $('settleDelay').value = Math.round(S.settleDelayMs/100);
+  $('settleVal').textContent = (S.settleDelayMs/1000).toFixed(1) + 's';
+  $('dbgOverlay').checked = S.dbgOverlay;
+  $('calibMode').value = S.calibMode;
+  updateCalibModeUI();
+  $('autoTurn').checked = S.autoTurn;
+  $('trackMoves').checked = S.trackMoves;
+  $('soundOn').checked = S.soundOn;
+  $('showMoveNum').checked = S.showMoveNum;
+  $('blackName').value = '';
+  $('whiteName').value = '';
+  $('gameName').value = '';
+  $('komi').value = 6.5;
+  $('handicap').value = 0;
+  $('result').value = '';
+  $('moveCount').textContent = 0;
+  setActiveSize(S.size);
+  updateGameStateUI();
+  updateRefBoardUI();
+  updateStoneCalibUI();
+  renderChat();
+  renderArchivePanel();
+  drawOverlay();
+  drawBoardCanvas('boardB');
+  saveSettings();
+  broadcastState();
 }
 function resizeOverlay(){
   const ov = $('overlay');
@@ -2323,12 +2401,48 @@ function drawBoardCanvas(canvasId, override){
   }
   // Calibration guide: stone placement indicators (drawn inside rotation so positions are correct)
   if(S.showCalibGuide && canvasId === 'boardB') drawCalibGuide(ctx, N, W, margin, step);
+  // "碁盤正面（黒番目線）" indicator — inside rotation transform, at right edge
+  // (Black's column i=N-1). Hidden once the game has started.
+  // Text is counter-rotated to stay upright on screen.
+  const _indStarted = canvasId === 'boardV'
+    ? (override && override.started)
+    : S.gameStarted;
+  if(!_indStarted){
+    const indFs = Math.max(10, Math.round(W * 0.034));
+    const indFs2 = Math.max(8, Math.round(W * 0.028));
+    ctx.font = `bold ${indFs}px sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const line1 = '碁盤正面';
+    const line2 = '（黒番目線）';
+    const tw1 = ctx.measureText(line1).width;
+    ctx.font = `${indFs2}px sans-serif`;
+    const tw2 = ctx.measureText(line2).width;
+    const padX = 8, padY = 5;
+    const bw = Math.max(tw1, tw2) + padX*2;
+    const bh = indFs + indFs2 + padY*2 + 2;
+    const bx = W - bw - 3, by = W/2 - bh/2;
+    ctx.fillStyle = 'rgba(26,18,8,0.85)';
+    ctx.fillRect(bx, by, bw, bh);
+    ctx.save();
+    ctx.translate(bx + bw/2, by + bh/2);
+    if(rot) ctx.rotate(-rot * Math.PI/2);
+    ctx.fillStyle = '#f4d03f';
+    ctx.font = `bold ${indFs}px sans-serif`;
+    ctx.fillText(line1, 0, -indFs2/2 - 1);
+    ctx.font = `${indFs2}px sans-serif`;
+    ctx.fillText(line2, 0, indFs/2 + 1);
+    ctx.restore();
+  }
   ctx.restore(); // end board rotation
   // Calibration guide instruction banner (outside rotation — always upright at bottom)
   if(S.showCalibGuide && canvasId === 'boardB'){
     const gfs = Math.max(10, Math.round(W * 0.034));
     ctx.save();
-    const glines = ['【盤面正面（対局者目線）から見て】', '●黒 → 右上・右下 の星に置く', '○白 → 左上・左下 の星に置く'];
+    const _rotEdge = ['右', '下', '左', '上'];
+    const _bEdge = _rotEdge[(rot) & 3];
+    const _wEdge = _rotEdge[(rot + 2) & 3];
+    const glines = [`【仮想盤に表示された印の位置に置いてください】`, `●黒 → ${_bEdge}端 の 2 つの星に置く`, `○白 → ${_wEdge}端 の 2 つの星に置く`];
     const glh = gfs * 1.6;
     const gbh = glines.length * glh + 10;
     const gbw = W * 0.84;
@@ -2343,33 +2457,6 @@ function drawBoardCanvas(canvasId, override){
       ctx.font = (ti === 0 ? '' : 'bold ') + gfs + 'px sans-serif';
       ctx.fillText(line, W/2, gby + 5 + ti * glh);
     });
-    ctx.restore();
-  }
-  // "● 黒番" edge indicator — always upright, placed at the edge where Black's
-  // star-point column (i=N-1) appears after applying boardRotation.
-  // rot=0 → right edge, rot=1 → bottom, rot=2 → left, rot=3 → top.
-  {
-    const indFs = Math.max(11, Math.round(W * 0.038));
-    ctx.save();
-    ctx.font = `bold ${indFs}px sans-serif`;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    const indText = '● 黒番';
-    const tw = ctx.measureText(indText).width;
-    const padX = 8, padY = 4;
-    const bw = tw + padX*2, bh = indFs + padY*2;
-    const pad = 3;
-    let bx, by;
-    switch(rot & 3){
-      case 0: bx = W - bw - pad; by = W/2 - bh/2; break;  // right edge
-      case 1: bx = W/2 - bw/2; by = W - bh - pad; break;  // bottom edge
-      case 2: bx = pad; by = W/2 - bh/2; break;            // left edge
-      default: bx = W/2 - bw/2; by = pad; break;           // top edge
-    }
-    ctx.fillStyle = 'rgba(26,18,8,0.80)';
-    ctx.fillRect(bx, by, bw, bh);
-    ctx.fillStyle = '#f4d03f';
-    ctx.fillText(indText, bx + bw/2, by + bh/2);
     ctx.restore();
   }
 }
@@ -3408,8 +3495,9 @@ function init(){
     S.initialPosition = null;
     S.gameStarted = false;
     S.moves = [];
-    S.refBoard = null;
-    S.stoneCalib = null;
+    // Do NOT clear S.refBoard or S.stoneCalib: boardRotation only rotates the
+    // display canvas; the detection homography keeps sampling the exact same
+    // physical pixels, so brightness-based calibration remains valid.
     $('moveCount').textContent = 0;
     updateGameStateUI();
     updateRefBoardUI();
@@ -3731,6 +3819,24 @@ function init(){
     playStoneClick();
     toast(c==='B' ? '黒がパス' : '白がパス');
   });
+  $('btnEndGame').addEventListener('click', ()=>{
+    if(!S.gameStarted){ toast('対局中ではありません', true); return; }
+    showCalibPrompt(
+      '終局して記録を終了しますか？<br>' +
+      '<span style="color:#aaa;font-weight:400;font-size:.85rem">棋譜は履歴パネルに保存されます。<br>結果欄に勝敗を入力してから押すことをお勧めします。</span>',
+      ()=>{
+        archiveCurrentGame();
+        clearGameSnapshot();
+        renderArchivePanel();
+        S.gameStarted = false;
+        S.movesInitialized = false;
+        updateGameStateUI();
+        drawBoardCanvas('boardB');
+        broadcastState();
+        toast('終局しました。棋譜を保存しました');
+      }
+    );
+  });
   $('btnResign').addEventListener('click', ()=>{
     if(!S.gameStarted){ toast('まず「開始」を押してください', true); return; }
     showResignPanel(
@@ -3756,9 +3862,26 @@ function init(){
     catch(e){ toast('コピー失敗', true); }
   });
   $('newId').addEventListener('click', ()=>{
-    try{ localStorage.removeItem('goboard.peerShortId'); }catch(e){}
-    startPeerHost(true);
-    toast('新しい部屋IDを発行します...');
+    showCalibPrompt(
+      '新しい部屋IDを発行しますか？<br>' +
+      '<span style="color:#aaa;font-weight:400;font-size:.85rem">部屋IDが変わると共に、校正データ・対局状態・対局者情報・検出設定が初期値に戻ります。<br>棋譜履歴は残ります。</span>',
+      ()=>{
+        try{ localStorage.removeItem('goboard.peerShortId'); }catch(e){}
+        resetAllSettings();
+        startPeerHost(true);
+        toast('新しい部屋IDを発行し、設定を初期化しました');
+      }
+    );
+  });
+  $('btnResetAll').addEventListener('click', ()=>{
+    showCalibPrompt(
+      'すべての設定を初期値に戻しますか？<br>' +
+      '<span style="color:#aaa;font-weight:400;font-size:.85rem">校正データ・対局状態・対局者情報・検出設定が初期値に戻ります。<br>棋譜履歴と部屋IDは残ります。</span>',
+      ()=>{
+        resetAllSettings();
+        toast('すべての設定を初期値に戻しました');
+      }
+    );
   });
   $('copyUrl').addEventListener('click', async ()=>{
     const v = $('viewUrl').textContent;
