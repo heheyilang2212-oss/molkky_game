@@ -207,17 +207,17 @@ a{color:#7cb7ff}
           <button class="nudgeCornerBtn" data-idx="2" style="padding:3px 0;border-radius:5px;border:1px solid rgba(255,255,255,.15);background:rgba(255,255,255,.06);color:#ddd;font-size:.65rem">右下</button>
         </div>
         <div style="display:grid;grid-template-columns:repeat(3,1fr);grid-template-rows:repeat(3,28px);gap:2px;margin-top:2px">
-          <div></div>
+          <button id="nudgeNW" style="display:none;border-radius:5px;border:1px solid rgba(255,255,255,.15);background:rgba(255,255,255,.08);color:#bbb;font-size:.95rem;padding:0">↖</button>
           <button id="nudgeUp" style="border-radius:5px;border:1px solid rgba(255,255,255,.15);background:rgba(255,255,255,.08);color:#bbb;font-size:.95rem;padding:0">↑</button>
-          <div></div>
+          <button id="nudgeNE" style="display:none;border-radius:5px;border:1px solid rgba(255,255,255,.15);background:rgba(255,255,255,.08);color:#bbb;font-size:.95rem;padding:0">↗</button>
           <button id="nudgeLeft" style="border-radius:5px;border:1px solid rgba(255,255,255,.15);background:rgba(255,255,255,.08);color:#bbb;font-size:.95rem;padding:0">←</button>
           <div id="nudgeCornerLabel" style="display:flex;align-items:center;justify-content:center;font-size:.55rem;color:#f4d03f;text-align:center;line-height:1.1;font-weight:700">左上</div>
           <button id="nudgeRight" style="border-radius:5px;border:1px solid rgba(255,255,255,.15);background:rgba(255,255,255,.08);color:#bbb;font-size:.95rem;padding:0">→</button>
-          <div></div>
+          <button id="nudgeSW" style="display:none;border-radius:5px;border:1px solid rgba(255,255,255,.15);background:rgba(255,255,255,.08);color:#bbb;font-size:.95rem;padding:0">↙</button>
           <button id="nudgeDown" style="border-radius:5px;border:1px solid rgba(255,255,255,.15);background:rgba(255,255,255,.08);color:#bbb;font-size:.95rem;padding:0">↓</button>
-          <div></div>
+          <button id="nudgeSE" style="display:none;border-radius:5px;border:1px solid rgba(255,255,255,.15);background:rgba(255,255,255,.08);color:#bbb;font-size:.95rem;padding:0">↘</button>
         </div>
-        <div style="font-size:.55rem;color:#666;text-align:center;line-height:1.2">1タップ=3px</div>
+        <div style="font-size:.55rem;color:#666;text-align:center;line-height:1.2">1タップ=1.5px</div>
       </div>
     </div>
     <div class="board-area">
@@ -340,7 +340,6 @@ a{color:#7cb7ff}
       <button id="btnCalibStones" title="●黒を右上・右下の星、○白を左上・左下の星に置いてからこのボタン">🎯 黒白の見本を記録（4つの星に置く）</button>
       <button id="btnClearCalib" style="display:none">見本をクリア</button>
       <button id="btnReset">隅をリセット</button>
-      <button id="btnAutoDetect" title="カメラ映像からHough変換で碁盤の4隅を自動検出します">🔍 碁盤を自動検出</button>
       <button id="btnRotate" title="盤の左上→右上→右下→左下の割り当てを時計回りにずらします">↻ 盤を時計回りに90°回転</button>
       <button id="btnFlipTrap" style="display:none" title="カメラの上下を入れ替えます（横撮り時に遠い辺と近い辺が逆のとき使用）">↕ 上下を反転（遠近入替）</button>
       <button id="btnRecalib">再キャリブレ</button>
@@ -854,6 +853,8 @@ function updateCalibModeUI(){
     else hint.textContent = '4隅を独立に動かせるモード（既定）。';
   }
   if(flip) flip.style.display = (S.calibMode === 'trapezoid') ? '' : 'none';
+  // Update nudge button visibility (cardinal vs diagonal) for the new mode.
+  if(typeof S._refreshNudgeSel === 'function') S._refreshNudgeSel();
 }
 function updateStoneCalibUI(){
   const cap = document.getElementById('btnCalibStones');
@@ -1298,140 +1299,6 @@ function resetAllSettings(){
   saveSettings();
   broadcastState();
 }
-// Automatic board corner detection using Sobel edges + Hough line transform.
-// Detects the four sides of the Go board from the current camera frame and
-// sets S.corners to the computed intersections.
-function autoDetectBoardCorners(){
-  const vid = S.videoEl;
-  if(!vid || !vid.videoWidth){ toast('カメラが起動していません', true); return; }
-  const cnv = S.procCanvas, ctx = S.procCtx;
-  const W = cnv.width, H = cnv.height;
-  ctx.drawImage(vid, 0, 0, W, H);
-  let imgData;
-  try{ imgData = ctx.getImageData(0, 0, W, H); }
-  catch(e){ toast('フレーム取得エラー', true); return; }
-  const pix = imgData.data;
-
-  // Grayscale
-  const gray = new Float32Array(W * H);
-  for(let i = 0; i < W * H; i++)
-    gray[i] = 0.299*pix[i*4] + 0.587*pix[i*4+1] + 0.114*pix[i*4+2];
-
-  // Sobel edge magnitude
-  const edge = new Float32Array(W * H);
-  let maxEdge = 0;
-  for(let y = 1; y < H-1; y++){
-    for(let x = 1; x < W-1; x++){
-      const gx = (-gray[(y-1)*W+(x-1)] - 2*gray[y*W+(x-1)] - gray[(y+1)*W+(x-1)]
-                  +gray[(y-1)*W+(x+1)] + 2*gray[y*W+(x+1)] + gray[(y+1)*W+(x+1)]);
-      const gy = (-gray[(y-1)*W+(x-1)] - 2*gray[(y-1)*W+x] - gray[(y-1)*W+(x+1)]
-                  +gray[(y+1)*W+(x-1)] + 2*gray[(y+1)*W+x] + gray[(y+1)*W+(x+1)]);
-      const m = Math.sqrt(gx*gx + gy*gy);
-      edge[y*W+x] = m;
-      if(m > maxEdge) maxEdge = m;
-    }
-  }
-
-  // Hough line transform: theta=0..179°, rho=[-diag..+diag]
-  const diag = Math.ceil(Math.sqrt(W*W + H*H));
-  const NT = 180, NR = 2*diag + 1;
-  const accum = new Int32Array(NT * NR);
-  const cosT = new Float32Array(NT), sinT = new Float32Array(NT);
-  for(let t = 0; t < NT; t++){
-    cosT[t] = Math.cos(t * Math.PI / NT);
-    sinT[t] = Math.sin(t * Math.PI / NT);
-  }
-  const edgeThresh = maxEdge * 0.15;
-  for(let y = 1; y < H-1; y++){
-    for(let x = 1; x < W-1; x++){
-      if(edge[y*W+x] < edgeThresh) continue;
-      for(let t = 0; t < NT; t++){
-        const rho = Math.round(x*cosT[t] + y*sinT[t]) + diag;
-        if(rho >= 0 && rho < NR) accum[t*NR+rho]++;
-      }
-    }
-  }
-
-  // Find global maximum, then NMS peak picking
-  let maxAccum = 0;
-  for(let i = 0; i < accum.length; i++) if(accum[i] > maxAccum) maxAccum = accum[i];
-  const peakThresh = Math.max(30, maxAccum * 0.3);
-  const DT = 15, DR = 20;
-  const peaks = [];
-  for(let t = 0; t < NT; t++){
-    for(let r = 0; r < NR; r++){
-      const val = accum[t*NR+r];
-      if(val < peakThresh) continue;
-      let isMax = true;
-      outer: for(let dt = -DT; dt <= DT; dt++){
-        for(let dr = -DR; dr <= DR; dr++){
-          if(dt === 0 && dr === 0) continue;
-          const tt = ((t+dt)%NT+NT)%NT;
-          const rr = r+dr;
-          if(rr < 0 || rr >= NR) continue;
-          if(accum[tt*NR+rr] > val){ isMax = false; break outer; }
-        }
-      }
-      if(isMax) peaks.push({ t, r: r-diag, v: val });
-    }
-  }
-  peaks.sort((a, b) => b.v - a.v);
-
-  // Classify by angle: horizontal (theta 65-115°) vs vertical (theta <=25° or >=155°)
-  const hLines = [], vLines = [];
-  for(const p of peaks){
-    if(p.t >= 65 && p.t <= 115) hLines.push(p);
-    else if(p.t <= 25 || p.t >= 155) vLines.push(p);
-  }
-  if(hLines.length < 2 || vLines.length < 2){
-    toast('碁盤の辺が検出できませんでした。碁盤を画角に収めてください。', true);
-    return;
-  }
-
-  // From top-20 strongest candidates, pick the pair with most extreme rho (board edges)
-  const hCands = hLines.slice(0, Math.min(20, hLines.length));
-  const vCands = vLines.slice(0, Math.min(20, vLines.length));
-  hCands.sort((a, b) => a.r - b.r);
-  vCands.sort((a, b) => a.r - b.r);
-  const topH = hCands[0], botH = hCands[hCands.length-1];
-  const leftV = vCands[0], rightV = vCands[vCands.length-1];
-
-  // Intersect two Hough lines (x*cos(t)+y*sin(t)=rho)
-  function intersectLines(l1, l2){
-    const a1=cosT[l1.t], b1=sinT[l1.t], c1=l1.r;
-    const a2=cosT[l2.t], b2=sinT[l2.t], c2=l2.r;
-    const det = a1*b2 - a2*b1;
-    if(Math.abs(det) < 1e-6) return null;
-    return { x: (c1*b2-c2*b1)/det, y: (a1*c2-a2*c1)/det };
-  }
-  const TL = intersectLines(topH, leftV);
-  const TR = intersectLines(topH, rightV);
-  const BR = intersectLines(botH, rightV);
-  const BL = intersectLines(botH, leftV);
-  if(!TL||!TR||!BR||!BL){ toast('碁盤の角の計算に失敗しました', true); return; }
-
-  // Reject if any corner is more than 50% outside the frame
-  for(const p of [TL,TR,BR,BL]){
-    if(p.x < -W*0.5 || p.x > W*1.5 || p.y < -H*0.5 || p.y > H*1.5){
-      toast('検出された碁盤が画角外です。碁盤を画角に収めてください。', true);
-      return;
-    }
-  }
-
-  S.corners = [
-    {x: clamp(TL.x/W,0,1), y: clamp(TL.y/H,0,1)},
-    {x: clamp(TR.x/W,0,1), y: clamp(TR.y/H,0,1)},
-    {x: clamp(BR.x/W,0,1), y: clamp(BR.y/H,0,1)},
-    {x: clamp(BL.x/W,0,1), y: clamp(BL.y/H,0,1)},
-  ];
-  if(S.calibMode === 'square') fitSquareToCorners();
-  else if(S.calibMode === 'trapezoid') fitTrapezoidToCorners();
-  drawOverlay();
-  saveSettings();
-  broadcastState();
-  toast('碁盤の角を自動検出しました。ドラッグで微調整できます。');
-}
-
 function resizeOverlay(){
   const ov = $('overlay');
   const v = $('cam');
@@ -1490,9 +1357,17 @@ function drawOverlay(){
   for(let i=1;i<4;i++) ctx.lineTo(pts[i].x, pts[i].y);
   ctx.closePath();
   ctx.stroke();
-  // Internal grid preview
+  // Internal grid preview. Rotate corner labels to match detection mapping
+  // so the dbg overlay's stone positions align with the canvas.
   if(S.committed){
-    const H = makeHomography(pts);
+    const _ovRot = (S.boardRotation || 0) & 3;
+    const ptsRot = _ovRot === 0 ? pts : [
+      pts[(0 + _ovRot) % 4],
+      pts[(1 + _ovRot) % 4],
+      pts[(2 + _ovRot) % 4],
+      pts[(3 + _ovRot) % 4],
+    ];
+    const H = makeHomography(ptsRot);
     const N = S.size;
     ctx.strokeStyle = 'rgba(244,208,63,.18)';
     ctx.lineWidth = 1;
@@ -1646,14 +1521,34 @@ function fitSquareToCorners(){
   ];
   setCornersFromPx(useSigns.map(s => ({ x: cxPx + s.sx*hs, y: cyPx + s.sy*hs })));
 }
-// Resize the square around its centre so the dragged corner sits at dragPx.
+// Resize the square so that the dragged corner moves to dragPx while the
+// diagonal-opposite corner stays fixed (anchor). The square's size is
+// determined by max(|dx|, |dy|) along the anchor→dragged diagonal.
 function squareDragResize(idx, dragPx){
   const cs = S.corners.map(normToOverlay);
-  const cxPx = (cs[0].x + cs[2].x) / 2;
-  const cyPx = (cs[0].y + cs[2].y) / 2;
-  const signs = cs.map(p => ({ sx: p.x < cxPx ? -1 : 1, sy: p.y < cyPx ? -1 : 1 }));
-  const hs = Math.max(14, Math.max(Math.abs(dragPx.x - cxPx), Math.abs(dragPx.y - cyPx)));
-  setCornersFromPx(signs.map(s => ({ x: cxPx + s.sx*hs, y: cyPx + s.sy*hs })));
+  const oppIdx = (idx + 2) % 4;
+  const opp = cs[oppIdx];
+  const dx = dragPx.x - opp.x, dy = dragPx.y - opp.y;
+  const sx = dx >= 0 ? 1 : -1;
+  const sy = dy >= 0 ? 1 : -1;
+  const size = Math.max(14, Math.max(Math.abs(dx), Math.abs(dy)));
+  const newCs = cs.slice();
+  newCs[idx] = { x: opp.x + sx*size, y: opp.y + sy*size };
+  newCs[oppIdx] = { x: opp.x, y: opp.y };
+  // The two side corners share one axis with the dragged corner and the
+  // other with the anchor, depending on which diagonal idx is on.
+  if(idx === 0 || idx === 2){
+    // Diagonal TL↔BR. Sides are TR (idx=1) and BL (idx=3).
+    // TR.x = BR.x = newCs[2].x; TR.y = TL.y = newCs[0].y
+    newCs[1] = { x: newCs[2].x, y: newCs[0].y };
+    newCs[3] = { x: newCs[0].x, y: newCs[2].y };
+  } else {
+    // Diagonal TR↔BL. Sides are TL (idx=0) and BR (idx=2).
+    // TL.x = BL.x = newCs[3].x; TL.y = TR.y = newCs[1].y
+    newCs[0] = { x: newCs[3].x, y: newCs[1].y };
+    newCs[2] = { x: newCs[1].x, y: newCs[3].y };
+  }
+  setCornersFromPx(newCs);
 }
 // Move the whole square by (dx, dy) overlay pixels.
 function squareTranslate(dxPx, dyPx){
@@ -1920,14 +1815,26 @@ function detectFrame(){
   catch(e){ return; }
   const data = imgData.data;
   const W = cnv.width, H = cnv.height;
-  const cornersPx = S.corners.map(c=>({ x: c.x*W, y: c.y*H }));
+  // cornersPx = physical TL/TR/BR/BL of the board in camera image (display rotation independent).
+  const cornersPxRaw = S.corners.map(c=>({ x: c.x*W, y: c.y*H }));
+  // For the homography, rotate the corner labels by S.boardRotation so the
+  // displayed (i,j) on the rotated canvas maps to the physically corresponding
+  // camera position. Visually CW rotation by `rot` steps shifts which corner
+  // the homography uses as TL: effCorners[k] = cornersPxRaw[(k + rot) % 4].
+  const _rot = (S.boardRotation || 0) & 3;
+  const cornersPx = _rot === 0 ? cornersPxRaw : [
+    cornersPxRaw[(0 + _rot) % 4],
+    cornersPxRaw[(1 + _rot) % 4],
+    cornersPxRaw[(2 + _rot) % 4],
+    cornersPxRaw[(3 + _rot) % 4],
+  ];
 
   // ---- Motion settle gate ---------------------------------------------------
   // Freeze recognition while there is movement in the board area, and for
   // `settleDelayMs` afterwards. This prevents a hand reaching across the board
   // from wiping the committed stones. When the gate releases, we snap the
   // history to the current frame so the new state takes effect immediately.
-  const motionInfo = computeMotion(imgData, cornersPx, S.prevSmall);
+  const motionInfo = computeMotion(imgData, cornersPxRaw, S.prevSmall);
   S.prevSmall = motionInfo.small;
   S.motionLevel = motionInfo.motion;
   const _now = Date.now();
@@ -3484,8 +3391,11 @@ function init(){
   // Corner nudge panel
   {
     let _nudgeIdx = 0;
-    const NUDGE_PX = 3;
+    const NUDGE_PX = 1.5;
     const CORNER_NAMES = ['左上','右上','右下','左下'];
+    // In square mode, each corner can move along its own diagonal (TL↔BR or
+    // TR↔BL). Only the two diagonal buttons aligned with that diagonal are
+    // shown; the perpendicular ones and the cardinal buttons are hidden.
     function refreshNudgeSel(){
       document.querySelectorAll('.nudgeCornerBtn').forEach(b=>{
         const active = +b.dataset.idx === _nudgeIdx;
@@ -3496,7 +3406,23 @@ function init(){
       });
       const lbl = $('nudgeCornerLabel');
       if(lbl) lbl.textContent = CORNER_NAMES[_nudgeIdx];
+      // Toggle which direction buttons are visible.
+      const isSquare = S.calibMode === 'square';
+      const card = ['nudgeUp','nudgeDown','nudgeLeft','nudgeRight'];
+      const diag = ['nudgeNW','nudgeNE','nudgeSW','nudgeSE'];
+      for(const id of card){ const el = $(id); if(el) el.style.display = isSquare ? 'none' : ''; }
+      if(isSquare){
+        // For TL (0) and BR (2): show ↖ and ↘. For TR (1) and BL (3): show ↗ and ↙.
+        const onDiagTLBR = (_nudgeIdx === 0 || _nudgeIdx === 2);
+        $('nudgeNW').style.display = onDiagTLBR ? '' : 'none';
+        $('nudgeSE').style.display = onDiagTLBR ? '' : 'none';
+        $('nudgeNE').style.display = onDiagTLBR ? 'none' : '';
+        $('nudgeSW').style.display = onDiagTLBR ? 'none' : '';
+      } else {
+        for(const id of diag){ const el = $(id); if(el) el.style.display = 'none'; }
+      }
     }
+    // Free-mode nudge: move just the selected corner.
     function doNudge(dx, dy){
       ensureCorners();
       const ov = $('overlay');
@@ -3509,6 +3435,16 @@ function init(){
       drawOverlay();
       saveSettings();
     }
+    // Square-mode diagonal nudge: move selected corner by (sx, sy)*NUDGE_PX
+    // and re-fit the square so the diagonal-opposite corner stays fixed.
+    function doSquareNudge(sx, sy){
+      ensureCorners();
+      const cs = S.corners.map(normToOverlay);
+      const c = cs[_nudgeIdx];
+      squareDragResize(_nudgeIdx, { x: c.x + sx * NUDGE_PX, y: c.y + sy * NUDGE_PX });
+      drawOverlay();
+      saveSettings();
+    }
     document.querySelectorAll('.nudgeCornerBtn').forEach(btn=>{
       btn.addEventListener('click', ()=>{ _nudgeIdx = +btn.dataset.idx; refreshNudgeSel(); });
     });
@@ -3516,6 +3452,12 @@ function init(){
     $('nudgeDown').addEventListener('click',  ()=> doNudge(0,  NUDGE_PX));
     $('nudgeLeft').addEventListener('click',  ()=> doNudge(-NUDGE_PX, 0));
     $('nudgeRight').addEventListener('click', ()=> doNudge( NUDGE_PX, 0));
+    $('nudgeNW').addEventListener('click',    ()=> doSquareNudge(-1, -1));
+    $('nudgeNE').addEventListener('click',    ()=> doSquareNudge( 1, -1));
+    $('nudgeSW').addEventListener('click',    ()=> doSquareNudge(-1,  1));
+    $('nudgeSE').addEventListener('click',    ()=> doSquareNudge( 1,  1));
+    // Expose so calibMode changes can refresh button visibility.
+    S._refreshNudgeSel = refreshNudgeSel;
     refreshNudgeSel();
   }
   document.querySelectorAll('.sizeBtns button').forEach(b=>{
@@ -3619,16 +3561,16 @@ function init(){
     drawOverlay();
     toast('隅をリセットしました - ドラッグで合わせて下さい');
   });
-  $('btnAutoDetect').addEventListener('click', autoDetectBoardCorners);
   $('btnRotate').addEventListener('click', ()=>{
     if(!S.corners) return;
     archiveCurrentGame();
     clearGameSnapshot();
     renderArchivePanel();
     // Rotate the visual display 90° CW. Corner positions stay unchanged —
-    // the homography keeps detecting the same physical intersections, we just
-    // view them from a rotated angle.  Black's star-point row (j=0) moves
-    // visually: rot=0 top, rot=1 right, rot=2 bottom, rot=3 left.
+    // the homography RE-LABELS which corner is TL/TR/BR/BL so that the
+    // rotated virtual board matches the camera view at the corresponding
+    // visual positions. Black's star-point row (j=0) moves visually:
+    // rot=0 top, rot=1 right, rot=2 bottom, rot=3 left.
     S.boardRotation = (S.boardRotation + 1) & 3;
     S.showCalibGuide = false;
     const _cpRot = $('calibPrompt'); if(_cpRot) _cpRot.style.display = 'none';
@@ -3637,9 +3579,10 @@ function init(){
     S.initialPosition = null;
     S.gameStarted = false;
     S.moves = [];
-    // Do NOT clear S.refBoard or S.stoneCalib: boardRotation only rotates the
-    // display canvas; the detection homography keeps sampling the exact same
-    // physical pixels, so brightness-based calibration remains valid.
+    // refBoard is per-cell, so it becomes invalid after rotation (each cell
+    // now maps to a different physical position). stoneCalib is a single
+    // global brightness pair and remains valid.
+    S.refBoard = null;
     $('moveCount').textContent = 0;
     updateGameStateUI();
     updateRefBoardUI();
