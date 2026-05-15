@@ -2716,6 +2716,12 @@ function renderViewerBoard(){
     drawBoardCanvas('boardV', { size: S.size, committed: null });
     $('vMoveLabel').textContent = '0';
     $('vMoveTotal').textContent = '0';
+    $('vMoveCount').textContent = '0';
+    $('vBCount').textContent = '0';
+    $('vWCount').textContent = '0';
+    $('vTurn').textContent = '';
+    $('vTurn').style.color = '';
+    const pEl = $('vPlayers'); if(pEl){ pEl.innerHTML = ''; pEl.style.display = 'none'; }
     return;
   }
   const N = data.size;
@@ -3032,7 +3038,9 @@ async function enterBroadcast(){
                 while(list.length > 20) list.pop();
                 localStorage.setItem(ARCHIVED_GAMES_KEY, JSON.stringify(list));
                 renderArchivePanel();
-              }catch(e){}
+              }catch(e){
+                if(e && e.name === 'QuotaExceededError') toast('⚠ ストレージ容量が不足しています。古いアーカイブを削除してください', true);
+              }
               clearGameSnapshot();
             }, null, '破棄する');
           },
