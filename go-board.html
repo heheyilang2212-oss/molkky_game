@@ -474,11 +474,12 @@ const STAR_POINTS = {
   19: [[3,3],[3,9],[3,15],[9,3],[9,9],[9,15],[15,3],[15,9],[15,15]],
 };
 // Four corner-star intersections used for the 黒白の見本 calibration:
-// place ○白 on the TL/BL stars and ●黒 on the TR/BR stars.
+// ●黒 on the top-edge stars (small j), ○白 on the bottom-edge stars (large j).
+// boardRotation=0 ⇒ black is at the top of the virtual display.
 const CORNER_STAR_POINTS = {
-  9:  { white: [[2,2],[2,6]], black: [[6,2],[6,6]] },
-  13: { white: [[3,3],[3,9]], black: [[9,3],[9,9]] },
-  19: { white: [[3,3],[3,15]], black: [[15,3],[15,15]] },
+  9:  { black: [[2,2],[6,2]], white: [[2,6],[6,6]] },
+  13: { black: [[3,3],[9,3]], white: [[3,9],[9,9]] },
+  19: { black: [[3,3],[15,3]], white: [[3,15],[15,15]] },
 };
 const PROC_W = 640;          // downscaled processing width
 const PEER_PREFIX = 'goboard-';
@@ -1232,6 +1233,8 @@ function resetAllSettings(){
   S.corners = defaultCorners();
   S.calibMode = 'square';
   S.boardRotation = 0;
+  // Enforce square shape (requires overlay to be sized; safe since we're in broadcast mode)
+  fitSquareToCorners();
   S.refBoard = null;
   S.stoneCalib = null;
   S.showCalibGuide = false;
@@ -2401,8 +2404,8 @@ function drawBoardCanvas(canvasId, override){
   }
   // Calibration guide: stone placement indicators (drawn inside rotation so positions are correct)
   if(S.showCalibGuide && canvasId === 'boardB') drawCalibGuide(ctx, N, W, margin, step);
-  // "碁盤正面（黒番目線）" indicator — inside rotation transform, at right edge
-  // (Black's column i=N-1). Hidden once the game has started.
+  // "碁盤正面（黒番目線）" indicator — inside rotation transform, at top edge
+  // (Black's row j=0). Hidden once the game has started.
   // Text is counter-rotated to stay upright on screen.
   const _indStarted = canvasId === 'boardV'
     ? (override && override.started)
@@ -2421,7 +2424,7 @@ function drawBoardCanvas(canvasId, override){
     const padX = 8, padY = 5;
     const bw = Math.max(tw1, tw2) + padX*2;
     const bh = indFs + indFs2 + padY*2 + 2;
-    const bx = W - bw - 3, by = W/2 - bh/2;
+    const bx = W/2 - bw/2, by = 3;
     ctx.fillStyle = 'rgba(26,18,8,0.85)';
     ctx.fillRect(bx, by, bw, bh);
     ctx.save();
@@ -2439,7 +2442,7 @@ function drawBoardCanvas(canvasId, override){
   if(S.showCalibGuide && canvasId === 'boardB'){
     const gfs = Math.max(10, Math.round(W * 0.034));
     ctx.save();
-    const _rotEdge = ['右', '下', '左', '上'];
+    const _rotEdge = ['上', '右', '下', '左'];
     const _bEdge = _rotEdge[(rot) & 3];
     const _wEdge = _rotEdge[(rot + 2) & 3];
     const glines = [`【仮想盤に表示された印の位置に置いてください】`, `●黒 → ${_bEdge}端 の 2 つの星に置く`, `○白 → ${_wEdge}端 の 2 つの星に置く`];
@@ -3129,6 +3132,9 @@ async function enterBroadcast(){
   try{
     await startCamera();
     resizeOverlay();
+    // Enforce square/trapezoid shape on initial load now that the overlay is sized.
+    if(S.calibMode === 'square') fitSquareToCorners();
+    else if(S.calibMode === 'trapezoid') fitTrapezoidToCorners();
     drawOverlay();
     startProcessingLoop();
     startPeerHost();
@@ -3485,8 +3491,8 @@ function init(){
     renderArchivePanel();
     // Rotate the visual display 90° CW. Corner positions stay unchanged —
     // the homography keeps detecting the same physical intersections, we just
-    // view them from a rotated angle.  Black's star-point column (i=N-1) moves
-    // visually: rot=0 right, rot=1 bottom, rot=2 left, rot=3 top.
+    // view them from a rotated angle.  Black's star-point row (j=0) moves
+    // visually: rot=0 top, rot=1 right, rot=2 bottom, rot=3 left.
     S.boardRotation = (S.boardRotation + 1) & 3;
     S.showCalibGuide = false;
     const _cpRot = $('calibPrompt'); if(_cpRot) _cpRot.style.display = 'none';
@@ -3505,7 +3511,7 @@ function init(){
     saveSettings();
     drawOverlay();
     drawBoardCanvas('boardB');
-    const rotLabels = ['右', '下', '左', '上'];
+    const rotLabels = ['上', '右', '下', '左'];
     toast(`↻ 表示を90°回転（黒番側は${rotLabels[S.boardRotation]}端）`);
   });
   $('btnStart').addEventListener('click', ()=>{
@@ -3679,7 +3685,7 @@ function init(){
     if(!sp){ toast(N+'路盤の星座標が未登録です', true); return; }
     if(!S._lastVs || S._lastVs.length !== N*N){ toast('まだ盤面が認識できていません', true); return; }
     // Step 0: nigiri reminder — determine who plays Black before calibration.
-    const rotEdgeLabels = ['右', '下', '左', '上'];
+    const rotEdgeLabels = ['上', '右', '下', '左'];
     const blackEdge = rotEdgeLabels[(S.boardRotation || 0) & 3];
     showCalibPrompt(
       '<span style="color:#f4d03f;font-weight:700">ニギリ（黒番決定）を先に行ってください</span><br>' +
