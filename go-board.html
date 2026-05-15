@@ -2002,8 +2002,8 @@ function detectFrame(){
   $('wCount').textContent = wc;
   if(S.autoTurn){
     // Passes don't change stone counts but do advance the turn, so factor them in.
-    const bPasses = S.movesInitialized ? (S.moves||[]).filter(m=>m.c==='B'&&m.x==null).length : 0;
-    const wPasses = S.movesInitialized ? (S.moves||[]).filter(m=>m.c==='W'&&m.x==null).length : 0;
+    let bPasses = 0, wPasses = 0;
+    if(S.movesInitialized){ for(const m of (S.moves||[])){ if(m.x==null){ if(m.c==='B') bPasses++; else wPasses++; } } }
     // Handicap stones (H>=2) belong to Black's initial setup; White plays first in the game.
     // Subtract them so the effective Black move count starts at 0 after placement.
     const handi = (typeof S.handicap === 'number' && S.handicap >= 2) ? S.handicap : 0;
@@ -2579,6 +2579,7 @@ function snapshotState(){
     initialPosition: (tracking && S.movesInitialized) ? S.initialPosition : null,
     started: S.gameStarted,
     turn: S.turn,
+    boardRotation: S.boardRotation || 0,
     blackName: S.blackName || '',
     whiteName: S.whiteName || '',
     gameName: S.gameName || '',
@@ -2737,6 +2738,7 @@ function renderViewerBoard(){
     committed: board,
     lastMove: lastMove,
     moves: (data.moves || []).slice(0, idx),
+    boardRotation: data.boardRotation || 0,
   });
   let bc=0, wc=0;
   for(const row of board) for(const c of row){
@@ -2753,6 +2755,13 @@ function renderViewerBoard(){
   } else {
     $('vTurn').textContent = '';
     $('vTurn').style.color = '';
+    // Turn indicator reflects the position being shown
+    if(lastMove){
+      const nextTurn = lastMove.c === 'B' ? 'W' : 'B';
+      $('vTurn').innerHTML = '手番: <b>' + (nextTurn==='B'?'黒●':'白○') + '</b>';
+    } else if(data.turn){
+      $('vTurn').innerHTML = '手番: <b>' + (data.turn==='B'?'黒●':'白○') + '</b>';
+    }
   }
   const pEl = $('vPlayers');
   if(pEl){
@@ -2773,13 +2782,6 @@ function renderViewerBoard(){
   if(+sl.max !== total) sl.max = total;
   // Don't overwrite slider while user is dragging it
   if(+sl.value !== idx && document.activeElement !== sl) sl.value = idx;
-  // Turn indicator reflects the position being shown
-  if(lastMove){
-    const nextTurn = lastMove.c === 'B' ? 'W' : 'B';
-    $('vTurn').innerHTML = '手番: <b>' + (nextTurn==='B'?'黒●':'白○') + '</b>';
-  } else if(data.turn){
-    $('vTurn').innerHTML = '手番: <b>' + (data.turn==='B'?'黒●':'白○') + '</b>';
-  }
   // Live badge
   const live = $('vToLive');
   if(live) live.classList.toggle('on', S.vAtLive);
@@ -2959,6 +2961,7 @@ async function enterBroadcast(){
   S.initialPosition = null;
   S.suspiciousFrames = 0;
   S.gameStarted = false;
+  S.showCalibGuide = false;
   S.connInfo = new Map();
   S.chat = [];
   renderChat();
@@ -3070,6 +3073,10 @@ function exitBroadcast(){
   S.conns = [];
   S.connInfo = null;
   if(S._pendingDeparts){ S._pendingDeparts.forEach(t=>clearTimeout(t)); S._pendingDeparts = null; }
+  // Close any floating fixed panels that may be open (they sit above all screens)
+  S.showCalibGuide = false;
+  const cp = $('calibPrompt'); if(cp) cp.style.display = 'none';
+  const rp = $('resignPanel'); if(rp) rp.style.display = 'none';
   showScreen('modeSelect');
 }
 function enterView(shortId){
