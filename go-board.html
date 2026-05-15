@@ -3053,6 +3053,7 @@ function enterView(shortId){
   S.vAtLive = true;
   S.vIsPlaying = false;
   S.vPrevMoveCount = 0;
+  S.vLatestState = null;
   if(S.vPlayHandle){ clearInterval(S.vPlayHandle); S.vPlayHandle = null; }
   $('vSlider').max = 0; $('vSlider').value = 0;
   $('vMoveLabel').textContent = '0';
@@ -3237,7 +3238,15 @@ function init(){
     toast('↕ 上下反転しました（遠近入替）');
   });
   $('autoTurn').addEventListener('change', e=>{ S.autoTurn = e.target.checked; saveSettings(); });
-  $('trackMoves').addEventListener('change', e=>{ S.trackMoves = e.target.checked; saveSettings(); });
+  $('trackMoves').addEventListener('change', e=>{
+    S.trackMoves = e.target.checked;
+    // When re-enabling mid-game, the committed board may have drifted from
+    // prevCommitted (which froze at the last sync). Re-sync now so the next
+    // trackMoves() call doesn't interpret the accumulated drift as a flood
+    // of new moves.
+    if(S.trackMoves && S.gameStarted && S.committed) syncPrevToCommitted();
+    saveSettings();
+  });
   $('soundOn').addEventListener('change', e=>{
     S.soundOn = e.target.checked;
     saveSettings();
