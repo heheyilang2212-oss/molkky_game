@@ -3022,7 +3022,9 @@ async function enterBroadcast(){
         `路盤: ${saved.size}路 / 手数: ${saved.moves.length} / ${ageStr}\n` +
         `${saved.blackName||'(黒)'} vs ${saved.whiteName||'(白)'}` +
         (saved.gameName ? `\n対局名: ${saved.gameName}` : '');
-      setTimeout(()=>{
+      S._restorePromptTimer = setTimeout(()=>{
+        S._restorePromptTimer = null;
+        if(S.mode !== 'broadcast') return;  // user left before timer fired
         showCalibPrompt(
           desc.replace(/\n/g, '<br>'),
           ()=>{ if(restoreFromSnapshot(saved)) toast('前回の対局を復元しました'); },
@@ -3082,7 +3084,8 @@ function exitBroadcast(){
   S.conns = [];
   S.connInfo = null;
   if(S._pendingDeparts){ S._pendingDeparts.forEach(t=>clearTimeout(t)); S._pendingDeparts = null; }
-  // Close any floating fixed panels that may be open (they sit above all screens)
+  // Cancel any pending restore prompt and close floating fixed panels
+  if(S._restorePromptTimer){ clearTimeout(S._restorePromptTimer); S._restorePromptTimer = null; }
   S.showCalibGuide = false;
   const cp = $('calibPrompt'); if(cp) cp.style.display = 'none';
   const rp = $('resignPanel'); if(rp) rp.style.display = 'none';
