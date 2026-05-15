@@ -347,6 +347,7 @@ a{color:#7cb7ff}
       <button id="btnUndo">最終手を取消</button>
       <button id="btnPass">パス</button>
       <button id="btnResign">投了</button>
+      <button id="btnEndGame" style="display:none">■ 終局（記録終了）</button>
       <button class="primary full" id="btnSGF">SGFをダウンロード</button>
     </div>
     <details class="settings" style="margin-top:8px" open>
@@ -921,6 +922,7 @@ function updateGameStateUI(){
   const ind = document.getElementById('gameStateInd');
   const start = document.getElementById('btnStart');
   const restart = document.getElementById('btnRestart');
+  const endGame = document.getElementById('btnEndGame');
   if(!ind || !start || !restart) return;
   if(S.gameStarted){
     ind.textContent = '対局中';
@@ -928,12 +930,14 @@ function updateGameStateUI(){
     ind.style.color = '#7cffa7';
     start.style.display = 'none';
     restart.style.display = '';
+    if(endGame) endGame.style.display = '';
   } else {
     ind.textContent = '準備中（開始を押すまで手数は数えません）';
     ind.style.background = 'rgba(244,208,63,.18)';
     ind.style.color = '#f4d03f';
     start.style.display = '';
     restart.style.display = 'none';
+    if(endGame) endGame.style.display = 'none';
   }
 }
 function median(arr){
@@ -2323,18 +2327,26 @@ function drawBoardCanvas(canvasId, override){
   }
   // Calibration guide: stone placement indicators (drawn inside rotation so positions are correct)
   if(S.showCalibGuide && canvasId === 'boardB') drawCalibGuide(ctx, N, W, margin, step);
-  // "● 黒番" indicator — drawn INSIDE the rotation transform so it tracks
-  // Black's column (i=N-1 = right edge in board space) automatically.
-  // The badge rectangle rides with the board; text is counter-rotated to stay upright.
-  {
-    const indFs = Math.max(11, Math.round(W * 0.038));
+  // "碁盤正面（黒番目線）" indicator — inside rotation transform, at right edge
+  // (Black's column i=N-1). Hidden once the game has started.
+  // Text is counter-rotated to stay upright on screen.
+  const _indStarted = canvasId === 'boardV'
+    ? (override && override.started)
+    : S.gameStarted;
+  if(!_indStarted){
+    const indFs = Math.max(10, Math.round(W * 0.034));
+    const indFs2 = Math.max(8, Math.round(W * 0.028));
     ctx.font = `bold ${indFs}px sans-serif`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    const indText = '● 黒番';
-    const tw = ctx.measureText(indText).width;
-    const padX = 8, padY = 4;
-    const bw = tw + padX*2, bh = indFs + padY*2;
+    const line1 = '碁盤正面';
+    const line2 = '（黒番目線）';
+    const tw1 = ctx.measureText(line1).width;
+    ctx.font = `${indFs2}px sans-serif`;
+    const tw2 = ctx.measureText(line2).width;
+    const padX = 8, padY = 5;
+    const bw = Math.max(tw1, tw2) + padX*2;
+    const bh = indFs + indFs2 + padY*2 + 2;
     const bx = W - bw - 3, by = W/2 - bh/2;
     ctx.fillStyle = 'rgba(26,18,8,0.85)';
     ctx.fillRect(bx, by, bw, bh);
@@ -2342,7 +2354,10 @@ function drawBoardCanvas(canvasId, override){
     ctx.translate(bx + bw/2, by + bh/2);
     if(rot) ctx.rotate(-rot * Math.PI/2);
     ctx.fillStyle = '#f4d03f';
-    ctx.fillText(indText, 0, 0);
+    ctx.font = `bold ${indFs}px sans-serif`;
+    ctx.fillText(line1, 0, -indFs2/2 - 1);
+    ctx.font = `${indFs2}px sans-serif`;
+    ctx.fillText(line2, 0, indFs/2 + 1);
     ctx.restore();
   }
   ctx.restore(); // end board rotation
@@ -3725,6 +3740,24 @@ function init(){
     saveGameSnapshot();
     playStoneClick();
     toast(c==='B' ? '黒がパス' : '白がパス');
+  });
+  $('btnEndGame').addEventListener('click', ()=>{
+    if(!S.gameStarted){ toast('対局中ではありません', true); return; }
+    showCalibPrompt(
+      '終局して記録を終了しますか？<br>' +
+      '<span style="color:#aaa;font-weight:400;font-size:.85rem">棋譜は履歴パネルに保存されます。<br>結果欄に勝敗を入力してから押すことをお勧めします。</span>',
+      ()=>{
+        archiveCurrentGame();
+        clearGameSnapshot();
+        renderArchivePanel();
+        S.gameStarted = false;
+        S.movesInitialized = false;
+        updateGameStateUI();
+        drawBoardCanvas('boardB');
+        broadcastState();
+        toast('終局しました。棋譜を保存しました');
+      }
+    );
   });
   $('btnResign').addEventListener('click', ()=>{
     if(!S.gameStarted){ toast('まず「開始」を押してください', true); return; }
