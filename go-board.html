@@ -217,6 +217,10 @@ a{color:#7cb7ff}
           <button id="nudgeDown" style="border-radius:5px;border:1px solid rgba(255,255,255,.15);background:rgba(255,255,255,.08);color:#bbb;font-size:.95rem;padding:0">↓</button>
           <button id="nudgeSE" style="display:none;border-radius:5px;border:1px solid rgba(255,255,255,.15);background:rgba(255,255,255,.08);color:#bbb;font-size:.95rem;padding:0">↘</button>
         </div>
+        <div style="display:flex;align-items:center;justify-content:center;gap:4px;margin-top:1px">
+          <input type="checkbox" id="nudgeFixRatio" checked style="width:11px;height:11px;cursor:pointer">
+          <label for="nudgeFixRatio" style="font-size:.55rem;color:#8aa899;cursor:pointer;user-select:none">比率固定</label>
+        </div>
         <div style="font-size:.55rem;color:#666;text-align:center;line-height:1.2">1タップ=1.5px</div>
       </div>
     </div>
@@ -425,9 +429,13 @@ a{color:#7cb7ff}
      TUTORIAL MODAL (shown on first broadcast open)
      ============================================================ -->
 <div id="tutModal" style="display:none;position:fixed;inset:0;z-index:900;background:rgba(0,0,0,.82);align-items:center;justify-content:center;padding:16px">
-  <div style="background:#1a1f1a;border:1px solid rgba(244,208,63,.35);border-radius:16px;max-width:420px;width:100%;padding:20px 22px;color:#e8e8ea;font-size:.88rem;line-height:1.6">
+  <div style="background:#1a1f1a;border:1px solid rgba(244,208,63,.35);border-radius:16px;max-width:420px;width:100%;padding:20px 22px;color:#e8e8ea;font-size:.88rem;line-height:1.6;max-height:90vh;overflow-y:auto">
     <h2 style="color:#f4d03f;font-size:1.1rem;margin-bottom:14px;letter-spacing:1px">📋 はじめにやること</h2>
     <ol style="padding-left:1.4em;display:flex;flex-direction:column;gap:10px">
+      <li>
+        <b>先に黒番を決める</b><br>
+        <span style="color:#aaa">ニギリなどで先に黒番を決めてください。その後に碁盤の向きを合わせます。</span>
+      </li>
       <li>
         <b>ハンドルを碁盤の四隅に合わせる</b><br>
         <span style="color:#aaa">黄色い丸①②③④を、碁盤の<br>
@@ -443,11 +451,12 @@ a{color:#7cb7ff}
       </li>
       <li>
         <b>方向がずれているときは「↻ 時計回りに90°回転」</b><br>
-        <span style="color:#aaa">石の位置がずれて表示される場合、回転ボタンを押して向きを調整してください。横撮りの場合は「校正モード：台形」を試してください。</span>
+        <span style="color:#aaa">黒番の正面（対面側）が画面上部になるよう回転ボタンで向きを調整してください。横撮りの場合は「校正モード：台形」を試してください。</span>
       </li>
       <li>
         <b>「▶ 開始」で着手のカウントを開始</b><br>
-        <span style="color:#aaa">石を置いても開始前はカウントされません。対局を始めるタイミングで「▶ 開始」を押してください。</span>
+        <span style="color:#aaa">石を置いても開始前はカウントされません。対局を始めるタイミングで「▶ 開始」を押してください。<br>
+        <b style="color:#f4d03f">置き碁の場合</b>は開始後に手で置き石を並べてから着手を始めてください。</span>
       </li>
       <li>
         <b>部屋IDまたはURLを観戦者に共有</b><br>
@@ -457,7 +466,6 @@ a{color:#7cb7ff}
     <div style="margin-top:18px;text-align:center">
       <button id="tutClose" style="padding:10px 36px;border-radius:30px;background:linear-gradient(135deg,#f4d03f,#e6b800);color:#1a1a1a;font-weight:700;border:none;font-size:.95rem;cursor:pointer">OK</button>
     </div>
-    <p style="font-size:.7rem;color:#555;text-align:center;margin-top:10px">次回からはこの案内は表示されません（設定→ヘルプから再表示可）</p>
   </div>
 </div>
 
@@ -853,6 +861,10 @@ function updateCalibModeUI(){
     else hint.textContent = '4隅を独立に動かせるモード（既定）。';
   }
   if(flip) flip.style.display = (S.calibMode === 'trapezoid') ? '' : 'none';
+  // Sync the nudge "比率固定" checkbox default to the chosen mode (square ⇒
+  // ratio fixed by default; free/trapezoid ⇒ independent). User can override.
+  const fixCb = document.getElementById('nudgeFixRatio');
+  if(fixCb) fixCb.checked = (S.calibMode === 'square');
   // Update nudge button visibility (cardinal vs diagonal) for the new mode.
   if(typeof S._refreshNudgeSel === 'function') S._refreshNudgeSel();
 }
@@ -3181,10 +3193,8 @@ async function enterBroadcast(){
     startProcessingLoop();
     startPeerHost();
     requestWakeLock();
-    if(!localStorage.getItem('goboard.tutDone')){
-      const tm = $('tutModal');
-      if(tm){ tm.style.display = 'flex'; }
-    }
+    const tm = $('tutModal');
+    if(tm){ tm.style.display = 'flex'; }
     // Offer to resume the previous game (if recent and has moves)
     const saved = loadGameSnapshot();
     if(saved && saved.moves && saved.moves.length){
@@ -3406,12 +3416,12 @@ function init(){
       });
       const lbl = $('nudgeCornerLabel');
       if(lbl) lbl.textContent = CORNER_NAMES[_nudgeIdx];
-      // Toggle which direction buttons are visible.
-      const isSquare = S.calibMode === 'square';
+      // Toggle which direction buttons are visible based on 比率固定 checkbox.
+      const fixRatio = $('nudgeFixRatio') ? $('nudgeFixRatio').checked : false;
       const card = ['nudgeUp','nudgeDown','nudgeLeft','nudgeRight'];
       const diag = ['nudgeNW','nudgeNE','nudgeSW','nudgeSE'];
-      for(const id of card){ const el = $(id); if(el) el.style.display = isSquare ? 'none' : ''; }
-      if(isSquare){
+      for(const id of card){ const el = $(id); if(el) el.style.display = fixRatio ? 'none' : ''; }
+      if(fixRatio){
         // For TL (0) and BR (2): show ↖ and ↘. For TR (1) and BL (3): show ↗ and ↙.
         const onDiagTLBR = (_nudgeIdx === 0 || _nudgeIdx === 2);
         $('nudgeNW').style.display = onDiagTLBR ? '' : 'none';
@@ -3456,6 +3466,9 @@ function init(){
     $('nudgeNE').addEventListener('click',    ()=> doSquareNudge( 1, -1));
     $('nudgeSW').addEventListener('click',    ()=> doSquareNudge(-1,  1));
     $('nudgeSE').addEventListener('click',    ()=> doSquareNudge( 1,  1));
+    if($('nudgeFixRatio')){
+      $('nudgeFixRatio').addEventListener('change', refreshNudgeSel);
+    }
     // Expose so calibMode changes can refresh button visibility.
     S._refreshNudgeSel = refreshNudgeSel;
     refreshNudgeSel();
@@ -4016,7 +4029,6 @@ function init(){
   $('tutClose').addEventListener('click', ()=>{
     const tm = $('tutModal');
     if(tm) tm.style.display = 'none';
-    localStorage.setItem('goboard.tutDone', '1');
   });
   $('btnShowTut').addEventListener('click', ()=>{
     const tm = $('tutModal');
