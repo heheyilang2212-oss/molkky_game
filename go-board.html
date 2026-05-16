@@ -224,6 +224,9 @@ a{color:#7cb7ff}
         <div style="font-size:.55rem;color:#666;text-align:center;line-height:1.2">1タップ=1.5px</div>
       </div>
     </div>
+    <div id="guideBar" style="display:none;padding:8px 12px;border-radius:8px;font-size:.78rem;line-height:1.5;flex-shrink:0">
+      <span id="guideMsg"></span>
+    </div>
     <div class="board-area">
       <canvas id="boardB" width="500" height="500"></canvas>
     </div>
@@ -885,6 +888,28 @@ function updateStoneCalibUI(){
     cap.style.borderColor = '';
     clr.style.display = 'none';
   }
+  updateGuideBar();
+}
+function updateGuideBar(){
+  const bar = document.getElementById('guideBar');
+  const msg = document.getElementById('guideMsg');
+  if(!bar || !msg) return;
+  if(S.gameStarted){
+    bar.style.display = 'none';
+    return;
+  }
+  bar.style.display = '';
+  if(S.stoneCalib && S.stoneCalib.size === S.size){
+    bar.style.background = 'rgba(124,255,167,.1)';
+    bar.style.border = '1px solid rgba(124,255,167,.3)';
+    msg.style.color = '#7cffa7';
+    msg.innerHTML = '✅ 見本記録済み &nbsp;—&nbsp; 石を取り除いてから <b style="color:#fff">「▶ 開始」</b> を押してください';
+  } else {
+    bar.style.background = 'rgba(244,208,63,.08)';
+    bar.style.border = '1px solid rgba(244,208,63,.25)';
+    msg.style.color = '#c8a820';
+    msg.innerHTML = '📋 準備手順: ① 四隅にハンドルを合わせる → ② ニギリ（黒番決定）→ ③ <b style="color:#f4d03f">「↻ 回転」</b>で黒の対面側を上に → ④ <b style="color:#f4d03f">「🎯 見本を記録」</b>';
+  }
 }
 function renderArchivePanel(){
   const list = document.getElementById('archiveList');
@@ -955,6 +980,7 @@ function updateGameStateUI(){
     restart.style.display = 'none';
     if(endGame) endGame.style.display = 'none';
   }
+  updateGuideBar();
 }
 function median(arr){
   const a = arr.slice().sort((x,y)=>x-y);
