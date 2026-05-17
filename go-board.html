@@ -459,7 +459,7 @@ a{color:#7cb7ff}
       <li>
         <b>「▶ 開始」で着手のカウントを開始</b><br>
         <span style="color:#aaa">石を置いても開始前はカウントされません。対局を始めるタイミングで「▶ 開始」を押してください。<br>
-        <b style="color:#f4d03f">置き碁の場合</b>は開始後に手で置き石を並べてから着手を始めてください。</span>
+        <b style="color:#f4d03f">置き碁の場合</b>は<b>先に置き石を盤に並べてから</b>「▶ 開始」を押してください（開始時の石は初期配置として記録されます）。</span>
       </li>
       <li>
         <b>部屋IDまたはURLを観戦者に共有</b><br>
@@ -2607,16 +2607,21 @@ function buildSGFFrom(N, initialBoard, currentBoard, moves, turn, meta){
     if(meta.result) body += `RE[${sgfText(meta.result)}]`;
   }
   const initial = initialBoard || currentBoard;
+  let isHandicapGame = !!(meta && typeof meta.handicap === 'number' && meta.handicap >= 2);
   if(initial){
     const ab = [], aw = [];
     for(let i=0;i<N;i++) for(let j=0;j<N;j++){
       if(initial[i][j] === 'B') ab.push(sgfCoord(i,j));
       else if(initial[i][j] === 'W') aw.push(sgfCoord(i,j));
     }
+    // Initial position with 2+ black stones and no white = handicap setup;
+    // SGF convention requires PL[W] so AI engines play white first.
+    if(ab.length >= 2 && aw.length === 0) isHandicapGame = true;
     if(ab.length) body += '\nAB' + ab.map(c=>'['+c+']').join('');
     if(aw.length) body += '\nAW' + aw.map(c=>'['+c+']').join('');
   }
   if(moves && moves.length){
+    if(isHandicapGame) body += '\nPL[W]';
     body += '\n';
     for(const m of moves){
       const isPass = (m.x == null || m.y == null);
@@ -2638,6 +2643,97 @@ function downloadSGF(text, filenamePrefix){
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(()=>URL.revokeObjectURL(url), 1000);
 }
+// Simulates the recorded moves on a virtual board to detect issues that would
+// break AI analysis on servers like OGS:
+//  - wrong turn (consecutive same-color moves)
+//  - moves on already-occupied points (usually a missed capture upstream)
+//  - suicide moves (group has no liberties after captures resolve)
+// Returns an array of human-readable issue strings; empty if all moves are legal.
+function validateSGFMoves(N, initialBoard, moves, meta){
+  if(!moves || !moves.length) return [];
+  const issues = [];
+  const letters = 'ABCDEFGHJKLMNOPQRST';
+  const board = [];
+  for(let i=0;i<N;i++){
+    const row = [];
+    for(let j=0;j<N;j++){
+      row.push(initialBoard && initialBoard[i] ? (initialBoard[i][j] || '.') : '.');
+    }
+    board.push(row);
+  }
+  let initBlack = 0, initWhite = 0;
+  if(initialBoard){
+    for(let i=0;i<N;i++) for(let j=0;j<N;j++){
+      if(initialBoard[i][j] === 'B') initBlack++;
+      else if(initialBoard[i][j] === 'W') initWhite++;
+    }
+  }
+  const isHandicap = (meta && typeof meta.handicap === 'number' && meta.handicap >= 2) ||
+                     (initBlack >= 2 && initWhite === 0);
+  let expected = isHandicap ? 'W' : 'B';
+  function fmtPos(x, y){ return letters[x] + (N - y); }
+  function getGroup(bx, by){
+    const color = board[bx][by];
+    if(color === '.') return null;
+    const visited = new Set();
+    const liberties = new Set();
+    const stack = [[bx, by]];
+    const group = [];
+    while(stack.length){
+      const [x, y] = stack.pop();
+      const k = x*N+y;
+      if(visited.has(k)) continue;
+      visited.add(k);
+      if(board[x][y] !== color) continue;
+      group.push([x, y]);
+      for(const [dx,dy] of [[-1,0],[1,0],[0,-1],[0,1]]){
+        const nx=x+dx, ny=y+dy;
+        if(nx<0||nx>=N||ny<0||ny>=N) continue;
+        if(board[nx][ny] === '.') liberties.add(nx*N+ny);
+        else if(board[nx][ny] === color && !visited.has(nx*N+ny)) stack.push([nx, ny]);
+      }
+    }
+    return { group, liberties: liberties.size };
+  }
+  for(let mi=0; mi<moves.length; mi++){
+    const m = moves[mi];
+    const num = mi + 1;
+    if(m.x == null || m.y == null){
+      expected = (expected === 'B') ? 'W' : 'B';
+      continue;
+    }
+    const x = m.x, y = m.y;
+    if(m.c !== expected){
+      issues.push(`${num}手目: 手番が${expected}のはずが${m.c}（連続同色）`);
+    }
+    if(x<0||x>=N||y<0||y>=N){
+      issues.push(`${num}手目: 盤外への着手`);
+      expected = (m.c === 'B') ? 'W' : 'B';
+      continue;
+    }
+    if(board[x][y] !== '.'){
+      issues.push(`${num}手目 ${m.c} ${fmtPos(x,y)}: 占有点への着手（捕獲漏れの可能性）`);
+    }
+    board[x][y] = m.c;
+    const opp = m.c === 'B' ? 'W' : 'B';
+    for(const [dx,dy] of [[-1,0],[1,0],[0,-1],[0,1]]){
+      const nx=x+dx, ny=y+dy;
+      if(nx<0||nx>=N||ny<0||ny>=N) continue;
+      if(board[nx][ny] === opp){
+        const g = getGroup(nx, ny);
+        if(g && g.liberties === 0){
+          for(const [gx,gy] of g.group) board[gx][gy] = '.';
+        }
+      }
+    }
+    const own = getGroup(x, y);
+    if(own && own.liberties === 0){
+      issues.push(`${num}手目 ${m.c} ${fmtPos(x,y)}: 自殺手`);
+    }
+    expected = (m.c === 'B') ? 'W' : 'B';
+  }
+  return issues;
+}
 function generateSGF(){
   const N = S.size;
   const initial = (S.trackMoves && S.movesInitialized && S.initialPosition) ? S.initialPosition : null;
@@ -2647,8 +2743,23 @@ function generateSGF(){
     komi: S.komi, handicap: S.handicap, result: S.result,
   };
   const text = buildSGFFrom(N, initial, S.committed, moves, S.turn, meta);
-  downloadSGF(text, 'goboard');
-  toast('SGF をダウンロードしました');
+  const issues = validateSGFMoves(N, initial, moves || [], meta);
+  const doDownload = () => {
+    downloadSGF(text, 'goboard');
+    toast('SGF をダウンロードしました');
+  };
+  if(!issues.length){ doDownload(); return; }
+  const shown = issues.slice(0, 8);
+  const more = issues.length > shown.length ? `<br>…ほか${issues.length - shown.length}件` : '';
+  const msg =
+    `<b style="color:#ff9b6b">⚠ 棋譜検証で${issues.length}件の問題</b><br>` +
+    `<span style="font-size:.78rem;color:#eee;font-weight:400;text-align:left;display:block;margin-top:8px;line-height:1.55">` +
+    shown.map(s => '・' + escapeHtml(s)).join('<br>') + more + '</span>' +
+    `<span style="font-size:.72rem;color:#aaa;display:block;margin-top:10px;line-height:1.5">` +
+    `OGSなどのAI形勢判断は失敗する可能性があります。<br>` +
+    `（検出ミスの可能性 — SGFを手動で編集するか、もう一度撮り直すと改善することがあります）` +
+    `</span>`;
+  showCalibPrompt(msg, doDownload, null, 'それでもダウンロード');
 }
 
 // ============================================================
