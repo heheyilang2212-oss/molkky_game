@@ -1896,8 +1896,9 @@ function detectFrame(){
     }
     $('stableDot').style.background = sCol;
     $('stableLbl').textContent = sLbl;
-    drawBoardCanvas('boardB');
-    drawOverlay();
+    // Board state is frozen, so only redraw it to animate the calibration guide
+    // pulse; the overlay (freeze banner countdown) is repainted by ovLoop.
+    if(S.showCalibGuide) drawBoardCanvas('boardB');
     return;
   }
   // ---------------------------------------------------------------------------
@@ -2181,15 +2182,40 @@ function detectFrame(){
   else if(S.consecutiveRejects > 3 || S.suspiciousFrames > 5){ sCol = '#f4d03f'; sLbl = 'やや不安定'; }
   $('stableDot').style.background = sCol;
   $('stableLbl').textContent = sLbl;
-  drawBoardCanvas('boardB');
-  drawOverlay();
-  broadcastState();
+  // Overlay is repainted by ovLoop; only redraw the board + broadcast on change.
+  refreshBoardAndBroadcast();
 }
 function snapshotCommitted(){
   const N = S.size;
   const out = new Array(N);
   for(let i=0;i<N;i++){ out[i] = S.committed[i].slice(); }
   return out;
+}
+// Cheap signature of everything the broadcaster board canvas / viewer snapshot
+// depends on. Used to avoid redrawing the whole board and re-broadcasting the
+// full state every processed frame when nothing actually changed — a real
+// battery/CPU win since the detection loop runs continuously at up to 20 fps.
+let _lastBoardSig = '';
+function boardSignature(){
+  if(!S.committed) return '';
+  const N = S.size;
+  let s = '';
+  for(let i=0;i<N;i++) s += S.committed[i].join('');
+  return s + '|' + (S.moves ? S.moves.length : 0) + '|' + (S.showMoveNum ? 1 : 0)
+           + '|' + (S.boardRotation || 0) + '|' + (S.gameStarted ? 1 : 0)
+           + '|' + (S.turn || '');
+}
+// Redraw the broadcaster board and push state to viewers only when the board
+// state changed. The calibration guide pulses, so force a redraw while it is
+// showing. The overlay is repainted independently by ovLoop (~15 fps).
+function refreshBoardAndBroadcast(){
+  const sig = boardSignature();
+  const changed = sig !== _lastBoardSig;
+  if(changed || S.showCalibGuide) drawBoardCanvas('boardB');
+  if(changed){
+    _lastBoardSig = sig;
+    broadcastState();
+  }
 }
 function syncPrevToCommitted(){
   const N = S.size;
@@ -2603,7 +2629,8 @@ function buildSGFFrom(N, initialBoard, currentBoard, moves, turn, meta){
     if(meta.blackName) body += `PB[${sgfText(meta.blackName)}]`;
     if(meta.whiteName) body += `PW[${sgfText(meta.whiteName)}]`;
     if(typeof meta.komi === 'number' && !isNaN(meta.komi)) body += `KM[${meta.komi}]`;
-    if(typeof meta.handicap === 'number' && meta.handicap > 0) body += `HA[${meta.handicap|0}]`;
+    // HA is only meaningful for 2+ handicap stones; HA[1] is invalid SGF.
+    if(typeof meta.handicap === 'number' && meta.handicap >= 2) body += `HA[${meta.handicap|0}]`;
     if(meta.result) body += `RE[${sgfText(meta.result)}]`;
   }
   const initial = initialBoard || currentBoard;
@@ -3093,10 +3120,12 @@ function renderViewerBoard(){
     const b = (data.blackName||'').trim();
     const w = (data.whiteName||'').trim();
     const g = (data.gameName||'').trim();
-    if(b || w || g){
+    const res = (data.result||'').trim();
+    if(b || w || g || res){
       const line1 = g ? `<div><b>${escapeHtml(g)}</b></div>` : '';
       const line2 = (b || w) ? `<div>●${escapeHtml(b || '黒')} vs ${escapeHtml(w || '白')}○</div>` : '';
-      pEl.innerHTML = line1 + line2;
+      const line3 = res ? `<div style="color:#7cffa7;font-weight:700">結果: ${escapeHtml(res)}</div>` : '';
+      pEl.innerHTML = line1 + line2 + line3;
       pEl.style.display = '';
     } else {
       pEl.innerHTML = '';
