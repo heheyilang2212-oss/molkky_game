@@ -40,7 +40,7 @@ a{color:#7cb7ff}
 /* ============================================================
    COMMON HEADER
    ============================================================ */
-.hdr{display:flex;align-items:center;gap:8px;padding:8px 12px;background:rgba(0,0,0,.6);border-bottom:1px solid rgba(255,255,255,.08);flex-shrink:0;z-index:5}
+.hdr{display:flex;align-items:center;gap:8px;padding:8px 12px;background:rgba(0,0,0,.6);border-bottom:1px solid rgba(255,255,255,.08);flex-shrink:0;z-index:5;flex-wrap:wrap}
 .hdr .back{background:none;border:none;color:#e8e8ea;font-size:1.4rem;padding:4px 8px;line-height:1}
 .hdr .title{font-size:.9rem;font-weight:700;color:#f4d03f}
 .hdr .spacer{flex:1}
@@ -128,7 +128,7 @@ a{color:#7cb7ff}
 /* ============================================================
    TOAST
    ============================================================ */
-#toast{position:fixed;bottom:30px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,.92);color:#fff;padding:10px 20px;border-radius:30px;font-size:.82rem;z-index:1000;opacity:0;pointer-events:none;transition:opacity .25s;border:1px solid rgba(244,208,63,.3);max-width:90%;text-align:center}
+#toast{position:fixed;bottom:30px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,.92);color:#fff;padding:10px 20px;border-radius:30px;font-size:.82rem;z-index:1100;opacity:0;pointer-events:none;transition:opacity .25s;border:1px solid rgba(244,208,63,.3);max-width:90%;text-align:center}
 #toast.show{opacity:1}
 #toast.err{border-color:#ff6b6b}
 
@@ -2204,16 +2204,26 @@ function detectFrame(){
   $('bCount').textContent = bc;
   $('wCount').textContent = wc;
   if(S.autoTurn){
-    // Passes don't change stone counts but do advance the turn, so factor them in.
-    let bPasses = 0, wPasses = 0;
-    if(S.movesInitialized){ for(const m of (S.moves||[])){ if(m.x==null){ if(m.c==='B') bPasses++; else wPasses++; } } }
-    // Handicap stones (H>=2) belong to Black's initial setup; White plays first in the game.
-    // Subtract them so the effective Black move count starts at 0 after placement.
-    const handi = (typeof S.handicap === 'number' && S.handicap >= 2) ? S.handicap : 0;
-    const adjBc = bc - handi + bPasses;
-    S.turn = handi > 0
-      ? (adjBc < wc + wPasses ? 'B' : 'W')   // handicap: White goes first → strict <
-      : (adjBc <= wc + wPasses ? 'B' : 'W');  // normal: Black goes first → <=
+    // Once moves are being recorded, the turn is simply the opposite color of
+    // the last recorded move (incl. passes). This is exact Go-rule turn order
+    // and — unlike counting stones on the board — is immune to captures, which
+    // change the stone counts without changing whose turn it is.
+    const lastMove = (S.gameStarted && S.movesInitialized && S.moves && S.moves.length)
+      ? S.moves[S.moves.length - 1] : null;
+    if(lastMove){
+      S.turn = (lastMove.c === 'B') ? 'W' : 'B';
+    } else {
+      // No moves yet (pre-first-move, or tracking off): fall back to estimating
+      // from stone counts. Handicap stones (H>=2) are Black's setup, so White
+      // plays first; subtract them so Black's effective count starts at 0.
+      let bPasses = 0, wPasses = 0;
+      if(S.movesInitialized){ for(const m of (S.moves||[])){ if(m.x==null){ if(m.c==='B') bPasses++; else wPasses++; } } }
+      const handi = (typeof S.handicap === 'number' && S.handicap >= 2) ? S.handicap : 0;
+      const adjBc = bc - handi + bPasses;
+      S.turn = handi > 0
+        ? (adjBc < wc + wPasses ? 'B' : 'W')   // handicap: White goes first → strict <
+        : (adjBc <= wc + wPasses ? 'B' : 'W');  // normal: Black goes first → <=
+    }
   }
   $('turnInd').innerHTML = '手番: <b>' + (S.turn==='B' ? '黒●' : '白○') + '</b>';
   // Stability indicator
@@ -3749,7 +3759,22 @@ function init(){
   });
   $('handicap').addEventListener('input', e=>{
     const v = parseInt(e.target.value, 10);
+    const prev = S.handicap;
     S.handicap = isNaN(v) ? 0 : Math.max(0, Math.min(9, v));
+    // Handicap games conventionally use komi 0.5 (OGS/KataGo default). Writing
+    // KM[6.5] together with HA[2+] is contradictory and throws AI score
+    // estimates off by ~6 points. Auto-adjust komi when the user sets a
+    // handicap, but only if komi is still at an untouched even-game default
+    // (6.5 / 7.5) so a deliberately customized komi is preserved.
+    if(S.handicap >= 2 && prev < 2 && (S.komi === 6.5 || S.komi === 7.5 || S.komi === 0)){
+      S.komi = 0.5;
+      $('komi').value = 0.5;
+      toast('置き碁のためコミを0.5に調整しました（変更可）');
+    } else if(S.handicap < 2 && prev >= 2 && S.komi === 0.5){
+      // Reverting to an even game: restore the standard komi.
+      S.komi = 6.5;
+      $('komi').value = 6.5;
+    }
     saveSettings();
     broadcastState();
   });

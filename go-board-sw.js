@@ -3,7 +3,7 @@
 //
 // Bump CACHE_VERSION whenever go-board.html (or other shell files) change so
 // returning users pick up the new release.
-const CACHE_VERSION = 'goboard-v42';
+const CACHE_VERSION = 'goboard-v43';
 const SHELL_FILES = [
   './go-board.html',
   './go-board-manifest.webmanifest',
