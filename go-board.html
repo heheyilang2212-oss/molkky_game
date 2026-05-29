@@ -1985,6 +1985,14 @@ function detectFrame(){
   // Normal board (sRef≈0.20) → 0.45; warm board (sRef≈0.35) → 0.55.
   const _sRef = _sRefCnt >= Math.ceil(N*N * 0.1) ? _sRefSum / _sRefCnt : 0.25;
   const W_SAT_MAX = Math.max(0.45, Math.min(0.60, _sRef + 0.20));
+  // Black stones are also achromatic — like white stones, they read as low
+  // saturation regardless of ambient warmth (a dark surface reflects little
+  // light, so it picks up little colour). A cell that is *dark* AND highly
+  // saturated is almost certainly NOT a black stone (it's a colored object,
+  // dark wood knot, or saturated shadow). Reject those.
+  // Threshold is generous (0.55) to avoid rejecting real stones under warm
+  // light, while still catching obviously colored cells (≥0.55 saturation).
+  const B_SAT_MAX = 0.55;
   // If we have a recorded empty-board reference for the current board size,
   // use it directly as the per-cell baseline. This handles wood-grain knots,
   // persistent shadows, and bowl/lid placement under the camera much better
@@ -2013,7 +2021,7 @@ function detectFrame(){
         const dB = Math.abs(v - c.blackV);
         const dW = Math.abs(v - c.whiteV);
         let val = '.';
-        if(dB < dW && dB + baseMargin < dE) val = 'B';
+        if(dB < dW && dB + baseMargin < dE && s < B_SAT_MAX) val = 'B';
         else if(dW < dB && dW + baseMargin < dE && s < satGate) val = 'W';
         cls[i][j] = val;
       }
@@ -2026,7 +2034,7 @@ function detectFrame(){
         const v = Vs[i*N + j];
         const s = Ss[i*N + j];
         const r = refV[i*N + j];
-        cls[i][j] = (v < r - S.blackTh) ? 'B'
+        cls[i][j] = (v < r - S.blackTh && s < B_SAT_MAX) ? 'B'
                   : (v > r + S.whiteTh && s < W_SAT_MAX) ? 'W'
                   : '.';
       }
@@ -2039,7 +2047,7 @@ function detectFrame(){
       for(let j=0;j<N;j++){
         const v = Vs[i*N + j];
         const s = Ss[i*N + j];
-        cls1[i][j] = (v < ref - S.blackTh) ? 'B'
+        cls1[i][j] = (v < ref - S.blackTh && s < B_SAT_MAX) ? 'B'
                    : (v > ref + S.whiteTh && s < W_SAT_MAX) ? 'W'
                    : '.';
       }
@@ -2095,7 +2103,7 @@ function detectFrame(){
         const lref = tmp.length >= 4 ? median(tmp) : ref;
         const v = Vs[i*N + j];
         const s = Ss[i*N + j];
-        cls[i][j] = (v < lref - S.blackTh) ? 'B'
+        cls[i][j] = (v < lref - S.blackTh && s < B_SAT_MAX) ? 'B'
                   : (v > lref + S.whiteTh && s < W_SAT_MAX) ? 'W'
                   : '.';
       }
@@ -2153,6 +2161,38 @@ function detectFrame(){
     }
   }
   commitFromHistory();
+  // Opportunistic refBoard capture: when the user finishes the stoneCalib flow
+  // (which sets _autoCapRefBoardPending), the board is freshly empty and well-
+  // lit. Wait a few stable empty frames and snapshot the wood baseline, so
+  // future detection uses the per-cell reference path automatically.
+  if(S._autoCapRefBoardPending){
+    let allEmpty = true;
+    for(let i=0;i<N && allEmpty;i++) for(let j=0;j<N;j++){
+      if(S.committed[i][j] !== '.'){ allEmpty = false; break; }
+    }
+    if(allEmpty && S.history[0] && S.history[0][0].length >= Math.min(S.histDepth, 5)){
+      S._autoCapEmptyStreak = (S._autoCapEmptyStreak || 0) + 1;
+      if(S._autoCapEmptyStreak >= 5 && S._lastVs && S._lastVs.length === N*N){
+        const sorted = Array.from(S._lastVs).sort((a,b)=>a-b);
+        const refMedian = sorted[sorted.length >> 1];
+        if(refMedian >= 20 && refMedian <= 240){
+          S.refBoard = {
+            size: N,
+            V: new Float32Array(S._lastVs),
+            S: new Float32Array(S._lastSs),
+            ts: Date.now(),
+          };
+          updateRefBoardUI();
+          saveSettings();
+          toast(`✓ 空の盤面を自動記録（基準輝度 ${Math.round(refMedian)}）`);
+        }
+        S._autoCapRefBoardPending = false;
+        S._autoCapEmptyStreak = 0;
+      }
+    } else {
+      S._autoCapEmptyStreak = 0;
+    }
+  }
   // Move tracking — only after the broadcaster has pressed 開始
   if(S.trackMoves && S.gameStarted) trackMoves();
   // Counts
@@ -3966,51 +4006,90 @@ function init(){
         '<span style="color:#aaa;font-size:.78rem">（仮想盤に表示された印を見て確認してください）</span></span><br>' +
         '置き終わったら下の OK を押してください',
         ()=>{
-          let bV = 0, wV = 0, bS = 0, wS = 0;
-          for(const [i,j] of sp.black){ bV += S._lastVs[i*N+j]; bS += S._lastSs[i*N+j]; }
-          for(const [i,j] of sp.white){ wV += S._lastVs[i*N+j]; wS += S._lastSs[i*N+j]; }
-          bV /= sp.black.length; bS /= sp.black.length;
-          wV /= sp.white.length; wS /= sp.white.length;
+          const bVs = sp.black.map(([i,j]) => S._lastVs[i*N+j]);
+          const wVs = sp.white.map(([i,j]) => S._lastVs[i*N+j]);
+          const bSs = sp.black.map(([i,j]) => S._lastSs[i*N+j]);
+          const wSs = sp.white.map(([i,j]) => S._lastSs[i*N+j]);
+          const bV = bVs.reduce((a,b)=>a+b,0) / bVs.length;
+          const wV = wVs.reduce((a,b)=>a+b,0) / wVs.length;
+          const bS = bSs.reduce((a,b)=>a+b,0) / bSs.length;
+          const wS = wSs.reduce((a,b)=>a+b,0) / wSs.length;
           if(bV >= wV - 20){
             S.showCalibGuide = false;
             drawBoardCanvas('boardB');
             toast('明るさの差が小さすぎます。黒白を逆に置いていませんか？', true);
             return;
           }
-          S.stoneCalib = { size: N, blackV: bV, whiteV: wV, blackS: bS, whiteS: wS, ts: Date.now() };
-          updateStoneCalibUI();
-          saveSettings();
-          toast(`見本を記録（黒V=${bV.toFixed(0)} / 白V=${wV.toFixed(0)}）`);
-          // Step 3: ask to remove stones, then snap the detection state.
-          showCalibPrompt(
-            '見本を記録しました<br>' +
-            '<span style="color:#fff;font-weight:400;font-size:.9rem">' +
-            '👉 盤面から 4 個の見本石を取り除いてから OK を押してください<br>' +
-            '<span style="color:#aaa;font-size:.78rem">（OK で盤面をリセットして、取り除いた状態から認識を開始します）</span></span>',
-            ()=>{
-              S.showCalibGuide = false;
-              archiveCurrentGame();
-              clearGameSnapshot();
-              renderArchivePanel();
-              initDetectionState();
-              S.gameStarted = false;
-              S.moves = [];
-              S.movesInitialized = false;
-              S.initialPosition = null;
-              $('moveCount').textContent = 0;
-              S.lastMotionTime = Date.now() - S.settleDelayMs - 200;
-              S._wasSettled = false;
-              updateGameStateUI();
-              drawBoardCanvas('boardB');
-              broadcastState();
-              toast('盤面をリセットしました（取り除いた状態から認識開始）');
-            },
+          // Sanity check: 2 stones of the same color should read similarly. A
+          // large spread means one is shadowed / glaring / mis-placed — the
+          // averaged anchor would be unreliable. Warn before committing.
+          const bRange = Math.max(...bVs) - Math.min(...bVs);
+          const wRange = Math.max(...wVs) - Math.min(...wVs);
+          const ANOMALY_TH = 35;
+          // After saving stoneCalib, prompt the user to remove the calibration
+          // stones, then auto-capture the empty-board reference (refBoard) once
+          // the board settles. With both stoneCalib + refBoard set, detection
+          // is at its most accurate.
+          const finishCalib = ()=>{
+            S.stoneCalib = { size: N, blackV: bV, whiteV: wV, blackS: bS, whiteS: wS, ts: Date.now() };
+            updateStoneCalibUI();
+            saveSettings();
+            toast(`見本を記録（黒V=${bV.toFixed(0)} / 白V=${wV.toFixed(0)}）`);
+            // Step 3: ask to remove stones, then snap the detection state.
+            showCalibPrompt(
+              '見本を記録しました<br>' +
+              '<span style="color:#fff;font-weight:400;font-size:.9rem">' +
+              '👉 盤面から 4 個の見本石を取り除いてから OK を押してください<br>' +
+              '<span style="color:#aaa;font-size:.78rem">（OK で盤面をリセットし、空の盤面の基準も自動記録します）</span></span>',
+              ()=>{
+                S.showCalibGuide = false;
+                archiveCurrentGame();
+                clearGameSnapshot();
+                renderArchivePanel();
+                initDetectionState();
+                S.gameStarted = false;
+                S.moves = [];
+                S.movesInitialized = false;
+                S.initialPosition = null;
+                $('moveCount').textContent = 0;
+                S.lastMotionTime = Date.now() - S.settleDelayMs - 200;
+                S._wasSettled = false;
+                updateGameStateUI();
+                drawBoardCanvas('boardB');
+                broadcastState();
+                // Schedule auto-capture of the empty-board reference once the
+                // detection settles (handled in detectFrame). Only kick this off
+                // when refBoard isn't already set for the current size so a
+                // careful manual capture isn't overwritten.
+                if(!S.refBoard || S.refBoard.size !== N){
+                  S._autoCapRefBoardPending = true;
+                  S._autoCapEmptyStreak = 0;
+                }
+                toast('盤面をリセットしました（取り除いた状態から認識開始）');
+              },
             ()=>{
               S.showCalibGuide = false;
               drawBoardCanvas('boardB');
               toast('リセットせず校正のみ完了しました', true);
             }
           );
+          };  // end finishCalib
+          if(bRange > ANOMALY_TH || wRange > ANOMALY_TH){
+            const which = bRange > wRange ? '黒' : '白';
+            const diff = Math.round(Math.max(bRange, wRange));
+            showCalibPrompt(
+              `<span style="color:#ff9b6b">⚠ ${which}石2個の明るさ差が大きいです（差 ${diff}）</span><br>` +
+              '<span style="color:#fff;font-weight:400;font-size:.85rem">' +
+              '一方が影や反射の影響を受けている可能性があります。<br>' +
+              '位置や照明を整えて置き直すと、認識精度が上がります。<br>' +
+              'このまま記録しますか？</span>',
+              finishCalib,
+              ()=>{ S.showCalibGuide = false; drawBoardCanvas('boardB'); },
+              '記録する'
+            );
+            return;
+          }
+          finishCalib();
         },
         ()=>{
           S.showCalibGuide = false;
